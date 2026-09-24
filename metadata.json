@@ -1,0 +1,6 @@
+{
+  "name": "TH True Mart - Quản Lý Cửa Hàng (Java + MySQL MVC)",
+  "description": "Ứng dụng và kiến trúc mã nguồn hoàn chỉnh đồ án Quản lý cửa hàng TH true mart bằng Java Swing/JavaFX + MySQL theo mô hình MVC.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
