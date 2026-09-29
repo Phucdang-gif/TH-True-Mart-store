@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState , useEffect} from 'react';
 import { Navbar } from './components/Navbar';
 import { BanHangPOS } from './components/pos/BanHangPOS';
 import { QuanLyHangHoa } from './components/products/QuanLyHangHoa';
@@ -7,8 +7,7 @@ import { QuanLyKhachHang } from './components/customers/QuanLyKhachHang';
 import { QuanLyNhanVien } from './components/staff/QuanLyNhanVien';
 import { QuanLyNhaCungCap } from './components/suppliers/QuanLyNhaCungCap';
 import { BaoCaoThongKe } from './components/reports/BaoCaoThongKe';
-import { 
-  INITIAL_PRODUCTS, 
+import {  
   INITIAL_BATCHES, 
   INITIAL_CUSTOMERS, 
   INITIAL_STAFF, 
@@ -23,7 +22,23 @@ export default function App() {
   const [activeModule, setActiveModule] = useState<number>(1); // 1 to 7
 
   // Application Data States
-  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
+  const [products, setProducts] = useState<Product[]>([]);
+
+  useEffect(() => {
+    const fetchProducts = async () => {
+      try {
+        const response = await fetch('http://localhost:3001/api/products');
+        if (response.ok) {
+          const data = await response.json();
+          setProducts(data);
+        }
+      } catch (error) {
+        console.error("Lỗi khi kết nối Database:", error);
+      }
+    };
+    
+    fetchProducts();
+  }, []);
   const [batches, setBatches] = useState<Batch[]>(INITIAL_BATCHES);
   const [customers, setCustomers] = useState<Customer[]>(INITIAL_CUSTOMERS);
   const [staffList, setStaffList] = useState<Staff[]>(INITIAL_STAFF);

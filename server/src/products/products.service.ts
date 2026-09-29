@@ -6,23 +6,49 @@ import {PrismaService} from '../prisma/prisma.service';
 export class ProductsService {
 
   constructor (private prisma: PrismaService){}
-  create(createProductDto: CreateProductDto) {
-    return 'This action adds a new product';
+
+  async create(createProductDto: CreateProductDto) {
+    const existingProduct = await this.prisma.products.findFirst({
+      where:{
+        OR:[
+          {code: createProductDto.code},
+          {barcode: createProductDto.barcode}
+        ]
+      }
+    });
+    if (existingProduct) {
+      throw new Error('Sản phẩm với mã hoặc mã vạch đã tồn tại');
+    }
+    return this.prisma.products.create({
+      data: createProductDto
+    });
   }
 
   async findAll() {
-    return this.prisma.products.findMany();
+    return this.prisma.products.findMany({
+      where :{status: 'active'},
+      orderBy: {createdAt: 'desc'},
+
+    });
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} product`;
+  async findOne(id: string) {
+    return this.prisma.products.findUnique({
+      where: { id },
+    });
   }
 
-  update(id: number, updateProductDto: UpdateProductDto) {
-    return `This action updates a #${id} product`;
+  async update(id: string, updateProductDto: UpdateProductDto) {
+    return this.prisma.products.update({
+      where: { id },
+      data: updateProductDto,
+    });
   }
 
-  remove(id: number) {
-    return `This action removes a #${id} product`;
+  async remove(id: string) {
+    return this.prisma.products.update({
+      where: { id },
+      data: { status: 'discontinued' },
+    });
   }
 }

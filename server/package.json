@@ -10,6 +10,7 @@
     "db:init": "node scripts/run-sql.js prisma/init.sql",
     "db:seed": "node scripts/run-sql.js prisma/seed.sql",
     "db:setup": "npm run db:init && npm run db:seed",
+    "db:data": "node scripts/run-sql.js data.sql",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:generate": "prisma generate"
@@ -25,7 +26,7 @@
     "@prisma/client": "^6.0.0",
     "bcrypt": "^5.1.1",
     "class-transformer": "^0.5.1",
-    "class-validator": "^0.14.1",
+    "class-validator": "^0.14.4",
     "dotenv": "^16.4.5",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",

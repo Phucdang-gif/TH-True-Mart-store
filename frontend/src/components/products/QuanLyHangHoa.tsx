@@ -91,32 +91,68 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
     setEditCostPrice(p.costPrice);
   };
 
-  const saveEditPrice = (productId: string) => {
-    onUpdateProductPrice(productId, editSellingPrice, editCostPrice);
-    setEditingId(null);
+    // Code mới gọi API PATCH /api/products/:id
+  const saveEditPrice = async (productId: string) => {
+    try {
+      const response = await fetch(`http://localhost:3001/api/products/${productId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sellingPrice: editSellingPrice,
+          costPrice: editCostPrice
+        })
+      });
+
+      if (response.ok) {
+        // Nếu Backend báo thành công, mới tiến hành cập nhật giao diện
+        onUpdateProductPrice(productId, editSellingPrice, editCostPrice);
+        setEditingId(null);
+      } else {
+        alert("Lỗi khi cập nhật giá trên hệ thống!");
+      }
+    } catch (error) {
+      console.error("Lỗi cập nhật giá:", error);
+    }
   };
 
-  const handleCreateProduct = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newProd.name) {
-      alert('Vui lòng nhập tên sản phẩm!');
-      return;
+  const handleCreateProduct = async (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!newProd.name) {
+    alert('Vui lòng nhập tên sản phẩm!');
+    return;
+  }
+
+  try {
+    const response = await fetch('http://localhost:3001/api/products', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code: newProd.code || 'TH-CUSTOM',
+        name: newProd.name,
+        category: newProd.category,
+        unit: newProd.unit || 'Hộp',
+        sellingPrice: Number(newProd.sellingPrice),
+        costPrice: Number(newProd.costPrice),
+        barcode: newProd.barcode || '',
+        minStockLevel: Number(newProd.minStockLevel) || 10,
+        description: newProd.description || '',
+        status: 'active'
+      })
+    });
+
+    if (response.ok) {
+      const savedProduct = await response.json();
+      // Gọi hàm từ props để cập nhật lại danh sách trên UI (App.tsx)
+      onAddProduct(savedProduct); 
+      setShowAddModal(false);
+    } else {
+      // Bắt lỗi Validation từ Backend (VD: Trùng mã Code/Barcode)
+      const errorData = await response.json();
+      alert(`Lỗi: ${errorData.message}`);
     }
-    const productToAdd: Product = {
-      id: `prod-${Date.now()}`,
-      code: newProd.code || 'TH-CUSTOM',
-      name: newProd.name,
-      category: newProd.category as Category,
-      unit: newProd.unit || 'Hộp',
-      sellingPrice: Number(newProd.sellingPrice),
-      costPrice: Number(newProd.costPrice),
-      barcode: newProd.barcode || '',
-      minStockLevel: Number(newProd.minStockLevel) || 10,
-      description: newProd.description || '',
-      status: 'active'
-    };
-    onAddProduct(productToAdd);
-    setShowAddModal(false);
+  } catch (error) {
+    console.error("Lỗi thêm sản phẩm:", error);
+  }
   };
 
   const handleCreatePromotion = (e: React.FormEvent) => {
