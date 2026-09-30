@@ -26,13 +26,15 @@ export const BaoCaoThongKe: React.FC<BaoCaoThongKeProps> = ({
   const [timeRange, setTimeRange] = useState<'today' | 'month' | 'year'>('month');
 
   // 7.1 Doanh thu calculations
-  const totalRevenue = invoices.reduce((acc, inv) => acc + inv.finalTotal, 0);
-  const totalInvoicesCount = invoices.length;
+  // Chỉ tính hóa đơn đã hoàn tất; hóa đơn đổi trả/hủy/chờ thanh toán/chờ duyệt không vào doanh thu
+  const completedInvoices = invoices.filter(inv => inv.status === 'completed');
+  const totalRevenue = completedInvoices.reduce((acc, inv) => acc + inv.finalTotal, 0);
+  const totalInvoicesCount = completedInvoices.length;
   
   // Calculate top selling products (7.2)
   const productSalesMap: { [productId: string]: { name: string; quantity: number; revenue: number } } = {};
   
-  invoices.forEach(inv => {
+  completedInvoices.forEach(inv => {
     inv.items.forEach(item => {
       if (!productSalesMap[item.productId]) {
         productSalesMap[item.productId] = {

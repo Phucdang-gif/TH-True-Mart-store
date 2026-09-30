@@ -12,6 +12,7 @@ import {
   X
 } from 'lucide-react';
 import { Staff } from '../../types';
+import { SHIFT_LABELS, SHIFT_LIST } from '../../lib/labels';
 
 interface QuanLyNhanVienProps {
   staffList: Staff[];
@@ -33,7 +34,7 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
     email: '',
     username: '',
     role: 'cashier',
-    shift: 'Sáng (06:00 - 14:00)',
+    shift: 'SANG',
     status: 'active'
   });
 
@@ -45,8 +46,12 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
 
   const handleCreateStaff = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newStaff.name || !newStaff.username) {
-      alert('Vui lòng nhập tên và tên đăng nhập nhân viên!');
+    if (!newStaff.name || !newStaff.username || !newStaff.email) {
+      alert('Vui lòng nhập tên, tên đăng nhập và email nhân viên!');
+      return;
+    }
+    if (staffList.some(s => s.username === newStaff.username || s.email === newStaff.email || s.code === newStaff.code)) {
+      alert('Mã nhân viên, tên đăng nhập hoặc email đã tồn tại!');
       return;
     }
     const staffToAdd: Staff = {
@@ -54,11 +59,13 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
       code: newStaff.code || `NV0${staffList.length + 1}`,
       name: newStaff.name,
       phone: newStaff.phone || '',
-      email: newStaff.email || '',
+      email: newStaff.email,
       username: newStaff.username,
-      role: newStaff.role as any || 'cashier',
+      password: '123456', // mật khẩu khởi tạo, server sẽ băm bcrypt (không lưu plaintext)
+      role: newStaff.role || 'cashier',
       status: 'active',
-      shift: newStaff.shift as any || 'Sáng (06:00 - 14:00)'
+      shift: newStaff.shift || 'SANG',
+      mustChangePassword: true // bắt buộc đổi mật khẩu ở lần đăng nhập đầu
     };
     onAddStaff(staffToAdd);
     setShowAddModal(false);
@@ -66,8 +73,6 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
 
   const getRoleBadge = (role: Staff['role']) => {
     switch (role) {
-      case 'admin':
-        return <span className="bg-purple-100 text-purple-800 px-2 py-0.5 rounded font-bold text-[10px]">Quản trị hệ thống (Admin)</span>;
       case 'manager':
         return <span className="bg-sky-100 text-sky-800 px-2 py-0.5 rounded font-bold text-[10px]">Quản lý cửa hàng (Store Manager)</span>;
       case 'cashier':
@@ -82,7 +87,7 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
       {/* Top Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
         <div>
-          <h3 className="font-bold text-sm text-slate-900">5. Quản lý nhân viên & Phân quyền</h3>
+          <h3 className="font-bold text-sm text-slate-900">4. Quản lý nhân viên & Phân quyền</h3>
           <p className="text-xs text-slate-500">Phân quyền tài khoản bảo mật và quản lý lịch phân ca làm việc tại cửa hàng</p>
         </div>
 
@@ -104,21 +109,17 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
             <span>5.1 Ma trận phân quyền chức năng</span>
           </h4>
           <div className="space-y-2 text-xs">
-            <div className="p-2 bg-purple-50 rounded border border-purple-100">
-              <span className="font-bold text-purple-900 block">Admin / Chủ cửa hàng</span>
-              <span className="text-[11px] text-purple-700">Toàn quyền cấu hình, tài chính, báo cáo, phân quyền.</span>
-            </div>
             <div className="p-2 bg-sky-50 rounded border border-sky-100">
               <span className="font-bold text-sky-900 block">Quản lý cửa hàng</span>
-              <span className="text-[11px] text-sky-700">Duyệt hủy hóa đơn, chỉnh giá bán, khuyến mãi, quản lý ca.</span>
+              <span className="text-[11px] text-sky-700">Toàn quyền: duyệt đổi trả/hoàn tiền, duyệt kết ca và kiểm kê, chỉnh giá, khuyến mãi, tài khoản & phân quyền, báo cáo.</span>
             </div>
             <div className="p-2 bg-emerald-50 rounded border border-emerald-100">
               <span className="font-bold text-emerald-900 block">Thu ngân (Cashier)</span>
-              <span className="text-[11px] text-emerald-700">Tra cứu sản phẩm, tạo đơn POS, thanh toán, tích điểm.</span>
+              <span className="text-[11px] text-emerald-700">Tra cứu sản phẩm, tạo đơn POS, thanh toán nhiều hình thức, xác nhận chuyển khoản, mở/kết ca thu ngân.</span>
             </div>
             <div className="p-2 bg-amber-50 rounded border border-amber-100">
               <span className="font-bold text-amber-900 block">Thủ kho (Warehouse)</span>
-              <span className="text-[11px] text-amber-700">Nhập kho lô hàng, kiểm soát HSD, kiểm kê kho.</span>
+              <span className="text-[11px] text-amber-700">Nhập kho lô hàng, xuất kho, kiểm soát HSD, kiểm kê kho, lập đơn đặt hàng.</span>
             </div>
           </div>
         </div>
@@ -161,17 +162,19 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
                     <td className="py-2.5 px-3">
                       <select
                         value={s.shift}
-                        onChange={(e) => onUpdateShift(s.id, e.target.value as any)}
+                        onChange={(e) => onUpdateShift(s.id, e.target.value as Staff['shift'])}
                         className="p-1 bg-slate-50 border border-slate-200 rounded text-xs text-slate-800 font-medium"
                       >
-                        <option value="Sáng (06:00 - 14:00)">Sáng (06:00 - 14:00)</option>
-                        <option value="Chiều (14:00 - 22:00)">Chiều (14:00 - 22:00)</option>
-                        <option value="Hành chính">Hành chính</option>
+                        {SHIFT_LIST.map(sh => (
+                          <option key={sh} value={sh}>{SHIFT_LABELS[sh]}</option>
+                        ))}
                       </select>
                     </td>
                     <td className="py-2.5 px-3 text-center">
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
-                        Đang làm việc
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        s.status === 'active' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
+                      }`}>
+                        {s.status === 'active' ? 'Đang làm việc' : 'Ngừng hoạt động'}
                       </span>
                     </td>
                   </tr>
@@ -247,6 +250,7 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
                     value={newStaff.email}
                     onChange={(e) => setNewStaff({...newStaff, email: e.target.value})}
                     className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+                    required
                   />
                 </div>
               </div>
@@ -256,30 +260,29 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
                   <label className="font-bold text-slate-700 block mb-1">Chức vụ / Vai trò</label>
                   <select
                     value={newStaff.role}
-                    onChange={(e) => setNewStaff({...newStaff, role: e.target.value as any})}
+                    onChange={(e) => setNewStaff({...newStaff, role: e.target.value as Staff['role']})}
                     className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
                   >
                     <option value="cashier">Thu ngân (Cashier)</option>
                     <option value="warehouse">Thủ kho (Warehouse)</option>
                     <option value="manager">Quản lý cửa hàng</option>
-                    <option value="admin">Quản trị viên (Admin)</option>
                   </select>
                 </div>
                 <div>
                   <label className="font-bold text-slate-700 block mb-1">Phân ca làm việc</label>
                   <select
                     value={newStaff.shift}
-                    onChange={(e) => setNewStaff({...newStaff, shift: e.target.value as any})}
+                    onChange={(e) => setNewStaff({...newStaff, shift: e.target.value as Staff['shift']})}
                     className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
                   >
-                    <option value="Sáng (06:00 - 14:00)">Sáng (06:00 - 14:00)</option>
-                    <option value="Chiều (14:00 - 22:00)">Chiều (14:00 - 22:00)</option>
-                    <option value="Hành chính">Hành chính</option>
+                    {SHIFT_LIST.map(sh => (
+                      <option key={sh} value={sh}>{SHIFT_LABELS[sh]}</option>
+                    ))}
                   </select>
                 </div>
               </div>
 
-              <p className="text-[11px] text-slate-500">Mật khẩu khởi tạo mặc định cho tài khoản mới: <span className="font-mono font-bold text-slate-800">123456</span></p>
+              <p className="text-[11px] text-slate-500">Mật khẩu khởi tạo (bắt buộc đổi ở lần đăng nhập đầu): <span className="font-mono font-bold text-slate-800">123456</span></p>
 
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button

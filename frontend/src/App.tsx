@@ -3,23 +3,22 @@ import { Navbar } from './components/Navbar';
 import { BanHangPOS } from './components/pos/BanHangPOS';
 import { QuanLyHangHoa } from './components/products/QuanLyHangHoa';
 import { QuanLyKho } from './components/inventory/QuanLyKho';
-import { QuanLyKhachHang } from './components/customers/QuanLyKhachHang';
 import { QuanLyNhanVien } from './components/staff/QuanLyNhanVien';
 import { QuanLyNhaCungCap } from './components/suppliers/QuanLyNhaCungCap';
 import { BaoCaoThongKe } from './components/reports/BaoCaoThongKe';
 import {  
   INITIAL_BATCHES, 
-  INITIAL_CUSTOMERS, 
   INITIAL_STAFF, 
   INITIAL_SUPPLIERS, 
   INITIAL_PROMOTIONS, 
   INITIAL_INVOICES,
   INITIAL_PURCHASE_ORDERS 
 } from './data/initialData';
-import { Product, Batch, Customer, Staff, Supplier, Promotion, Invoice, PurchaseOrder } from './types';
+import { Product, Batch, Staff, Supplier, Promotion, Invoice, InvoiceApproval, PurchaseOrder, StockAudit } from './types';
+import { toNum } from './lib/labels';
 
 export default function App() {
-  const [activeModule, setActiveModule] = useState<number>(1); // 1 to 7
+  const [activeModule, setActiveModule] = useState<number>(1); // 1 to 6
 
   // Application Data States
   const [products, setProducts] = useState<Product[]>([]);
@@ -30,7 +29,13 @@ export default function App() {
         const response = await fetch('http://localhost:3001/api/products');
         if (response.ok) {
           const data = await response.json();
-          setProducts(data);
+          // Prisma trả DECIMAL dạng chuỗi -> ép về số để tính toán
+          setProducts(data.map((p: any) => ({
+            ...p,
+            sellingPrice: toNum(p.sellingPrice),
+            costPrice: toNum(p.costPrice),
+            discountPercent: p.discountPercent == null ? undefined : toNum(p.discountPercent),
+          })));
         }
       } catch (error) {
         console.error("Lỗi khi kết nối Database:", error);
@@ -40,12 +45,15 @@ export default function App() {
     fetchProducts();
   }, []);
   const [batches, setBatches] = useState<Batch[]>(INITIAL_BATCHES);
-  const [customers, setCustomers] = useState<Customer[]>(INITIAL_CUSTOMERS);
   const [staffList, setStaffList] = useState<Staff[]>(INITIAL_STAFF);
   const [suppliers, setSuppliers] = useState<Supplier[]>(INITIAL_SUPPLIERS);
   const [promotions, setPromotions] = useState<Promotion[]>(INITIAL_PROMOTIONS);
   const [invoices, setInvoices] = useState<Invoice[]>(INITIAL_INVOICES);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>(INITIAL_PURCHASE_ORDERS);
+  const [stockAudits, setStockAudits] = useState<StockAudit[]>([]);
+
+  // Nhân viên đang thao tác. TODO: thay bằng tài khoản đăng nhập (auth_sessions) khi có màn hình đăng nhập.
+  const currentStaff: Staff = staffList.find(s => s.role === 'manager' && s.status === 'active') || staffList[0];
 
   // Expiring Batches calculation for urgent badge in Navbar
   const getDaysLeft = (expiryDateStr: string) => {
@@ -61,7 +69,7 @@ export default function App() {
   }).length;
 
   // Handlers
-  // 1. Transaction handler: POS completed invoice -> deduct batch (FIFO) & add customer points
+  // 1. Transaction handler: POS completed invoice -> deduct batch (FIFO) 
   const handleCreateInvoice = (newInvoice: Invoice) => {
     setInvoices(prev => [newInvoice, ...prev]);
 
@@ -88,41 +96,42 @@ export default function App() {
       });
       return updated;
     });
-
-    // Customer loyalty points update
-    if (newInvoice.customerId) {
-      setCustomers(prev => prev.map(c => {
-        if (c.id === newInvoice.customerId) {
-          const newPoints = c.points - newInvoice.pointsUsed + newInvoice.pointsEarned;
-          const newTotalSpent = c.totalSpent + newInvoice.finalTotal;
-          let tier = c.tier;
-          if (newTotalSpent > 5000000) tier = 'Diamond';
-          else if (newTotalSpent > 2500000) tier = 'Gold';
-          else if (newTotalSpent > 1000000) tier = 'Silver';
-
-          return {
-            ...c,
-            points: Math.max(0, newPoints),
-            totalSpent: newTotalSpent,
-            tier
-          };
-        }
-        return c;
-      }));
-    }
   };
 
-  const handleReturnInvoice = (invoiceId: string, reason: string) => {
-    setInvoices(prev => prev.map(inv => 
-      inv.id === invoiceId ? { ...inv, status: 'returned', notes: `${inv.notes || ''} [Đã trả hàng: ${reason}]` } : inv
+  // Đổi trả / hủy hóa đơn: quản lý duyệt (invoice_approvals) + hoàn tồn kho
+  type ApprovalInput = Omit<InvoiceApproval, 'id' | 'createdAt' | 'action'>;
+
+  const restoreStock = (invoice: Invoice) => {
+    setBatches(prev => prev.map(b => {
+      const item = invoice.items.find(i => (i.batchId ? i.batchId === b.id : i.batchCode === b.batchCode));
+      return item ? { ...b, quantity: b.quantity + item.quantity } : b;
+    }));
+  };
+
+  const applyApproval = (invoiceId: string, action: 'return' | 'cancel', input: ApprovalInput) => {
+    const target = invoices.find(inv => inv.id === invoiceId);
+    if (!target) return;
+    const approval: InvoiceApproval = {
+      ...input,
+      id: `appr-${Date.now()}`,
+      action,
+      createdAt: new Date().toLocaleString('vi-VN'),
+    };
+    setInvoices(prev => prev.map(inv =>
+      inv.id === invoiceId
+        ? {
+            ...inv,
+            status: action === 'return' ? 'returned' : 'cancelled',
+            approvals: [...(inv.approvals || []), approval],
+            notes: `${inv.notes || ''} [${action === 'return' ? 'Đã trả hàng' : 'Đã hủy'}: ${input.reason}]`,
+          }
+        : inv
     ));
+    restoreStock(target);
   };
 
-  const handleCancelInvoice = (invoiceId: string, reason: string) => {
-    setInvoices(prev => prev.map(inv => 
-      inv.id === invoiceId ? { ...inv, status: 'cancelled', notes: `${inv.notes || ''} [Đã hủy: ${reason}]` } : inv
-    ));
-  };
+  const handleReturnInvoice = (invoiceId: string, input: ApprovalInput) => applyApproval(invoiceId, 'return', input);
+  const handleCancelInvoice = (invoiceId: string, input: ApprovalInput) => applyApproval(invoiceId, 'cancel', input);
 
   // 2. Product management handlers
   const handleUpdateProductPrice = (productId: string, newSellingPrice: number, newCostPrice: number) => {
@@ -150,18 +159,26 @@ export default function App() {
     ));
   };
 
-  // 4. Customer handlers
-  const handleAddCustomer = (newCustomer: Customer) => {
-    setCustomers(prev => [...prev, newCustomer]);
+  // Kiểm kê: lập phiếu -> chờ quản lý duyệt -> khi duyệt mới cập nhật tồn kho theo số thực tế
+  const handleSubmitAudit = (audit: StockAudit) => {
+    setStockAudits(prev => [audit, ...prev]);
   };
 
-  const handleUpdateCustomerPoints = (customerId: string, deltaPoints: number) => {
-    setCustomers(prev => prev.map(c => 
-      c.id === customerId ? { ...c, points: Math.max(0, c.points + deltaPoints) } : c
+  const handleReviewAudit = (auditId: string, approved: boolean, approverId: string) => {
+    const audit = stockAudits.find(x => x.id === auditId);
+    if (!audit || audit.status !== 'pending_approval') return;
+    setStockAudits(prev => prev.map(x =>
+      x.id === auditId ? { ...x, status: approved ? 'approved' : 'rejected', approvedById: approverId } : x
     ));
+    if (approved) {
+      setBatches(prev => prev.map(b => {
+        const line = audit.items.find(i => i.batchId === b.id);
+        return line ? { ...b, quantity: line.actualQuantity } : b;
+      }));
+    }
   };
 
-  // 5. Staff handlers
+  // 4. Staff handlers
   const handleAddStaff = (newStaff: Staff) => {
     setStaffList(prev => [...prev, newStaff]);
   };
@@ -172,7 +189,7 @@ export default function App() {
     ));
   };
 
-  // 6. Supplier handlers
+  // 5. Supplier handlers
   const handleAddSupplier = (newSup: Supplier) => {
     setSuppliers(prev => [...prev, newSup]);
   };
@@ -183,7 +200,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800">
-      {/* Top Main Navigation Bar with 7 BFD modules */}
+      {/* Top Main Navigation Bar with 6 modules */}
       <Navbar
         activeModule={activeModule}
         setActiveModule={setActiveModule}
@@ -197,7 +214,7 @@ export default function App() {
             <BanHangPOS
               products={products}
               batches={batches}
-              customers={customers}
+              currentStaff={currentStaff}
               promotions={promotions}
               invoices={invoices}
               onCompleteSale={handleCreateInvoice}
@@ -222,19 +239,14 @@ export default function App() {
               batches={batches}
               onAddBatch={handleAddBatch}
               onAdjustStock={handleAdjustStock}
+              currentStaff={currentStaff}
+              audits={stockAudits}
+              onSubmitAudit={handleSubmitAudit}
+              onReviewAudit={handleReviewAudit}
             />
           )}
 
           {activeModule === 4 && (
-            <QuanLyKhachHang
-              customers={customers}
-              invoices={invoices}
-              onAddCustomer={handleAddCustomer}
-              onUpdateCustomerPoints={handleUpdateCustomerPoints}
-            />
-          )}
-
-          {activeModule === 5 && (
             <QuanLyNhanVien
               staffList={staffList}
               onAddStaff={handleAddStaff}
@@ -242,7 +254,7 @@ export default function App() {
             />
           )}
 
-          {activeModule === 6 && (
+          {activeModule === 5 && (
             <QuanLyNhaCungCap
               suppliers={suppliers}
               products={products}
@@ -252,7 +264,7 @@ export default function App() {
             />
           )}
 
-          {activeModule === 7 && (
+          {activeModule === 6 && (
             <BaoCaoThongKe
               invoices={invoices}
               products={products}

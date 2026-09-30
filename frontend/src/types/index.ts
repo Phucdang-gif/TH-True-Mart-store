@@ -1,11 +1,31 @@
-export type Category = 
-  | 'Sữa tươi tiệt trùng'
-  | 'Sữa tươi thanh trùng'
-  | 'Sữa chua ăn & uống'
-  | 'Bơ & Phô mai tự nhiên'
-  | 'Kem TH true ICE CREAM'
-  | 'Nước tinh khiết & Nước trái cây'
-  | 'Trà tự nhiên TH true TEA';
+// Kiểu dữ liệu khớp với database (init.sql). Giá trị ENUM dùng đúng mã trong DB;
+// nhãn tiếng Việt nằm ở src/lib/labels.ts.
+
+export type Category =
+  | 'SUA_TUOI_TIET_TRUNG'
+  | 'SUA_TUOI_THANH_TRUNG'
+  | 'SUA_CHUA'
+  | 'BO_PHOMAI'
+  | 'KEM'
+  | 'NUOC'
+  | 'TRA';
+
+export type ProductStatus = 'active' | 'discontinued';
+export type BatchStatus = 'good' | 'expiring_soon' | 'expired';
+// 'mixed' chỉ dùng ở Invoice.paymentMethod; từng khoản trong InvoicePayment là cash | transfer | card
+export type PaymentMethod = 'cash' | 'transfer' | 'card' | 'mixed';
+export type PaymentStatus = 'pending' | 'confirmed' | 'failed';
+export type InvoiceStatus = 'completed' | 'pending_payment' | 'returned' | 'cancelled' | 'pending_approval';
+export type CashSessionStatus = 'open' | 'closed' | 'reviewed';
+export type StaffRole = 'manager' | 'cashier' | 'warehouse';
+export type StaffStatus = 'active' | 'inactive';
+export type Shift = 'SANG' | 'CHIEU' | 'HANH_CHINH';
+export type DiscountType = 'percentage' | 'fixed_amount';
+export type PromotionStatus = 'draft' | 'scheduled' | 'active' | 'paused' | 'expired';
+export type PromotionScope = 'order' | 'category' | 'product' | 'near_expiry';
+export type SupplierStatus = 'active' | 'inactive';
+export type PurchaseOrderStatus = 'pending' | 'received' | 'cancelled';
+export type StockAuditStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected';
 
 export interface Batch {
   id: string;
@@ -15,7 +35,8 @@ export interface Batch {
   expiryDate: string; // YYYY-MM-DD
   quantity: number;
   importPrice: number;
-  status: 'good' | 'expiring_soon' | 'expired'; // expiring_soon <= 30 days
+  status: BatchStatus; // expiring_soon <= 30 days
+  receivedById?: string; // staff.id người nhập kho
 }
 
 export interface Product {
@@ -30,7 +51,7 @@ export interface Product {
   minStockLevel: number;
   description: string;
   imageUrl?: string;
-  status: 'active' | 'discontinued';
+  status: ProductStatus;
   discountPercent?: number;
 }
 
@@ -47,6 +68,7 @@ export interface InvoiceItem {
   productId: string;
   productCode: string;
   productName: string;
+  batchId?: string;
   batchCode: string;
   unit: string;
   quantity: number;
@@ -55,39 +77,65 @@ export interface InvoiceItem {
   subtotal: number;
 }
 
+// Bảng invoice_payments: từng khoản thanh toán của hóa đơn
+export interface InvoicePayment {
+  id: string;
+  method: Exclude<PaymentMethod, 'mixed'>;
+  amount: number; // số tiền tính vào hóa đơn (đã trừ tiền thối)
+  status: PaymentStatus;
+  reference?: string; // mã giao dịch chuyển khoản / chuẩn chi thẻ
+  confirmedById?: string;
+  confirmedAt?: string;
+}
+
+// Bảng invoice_approvals: lưu vết quản lý duyệt đổi trả/hủy + hoàn tiền
+export interface InvoiceApproval {
+  id: string;
+  action: 'return' | 'cancel';
+  reason: string;
+  refundAmount: number;
+  refundMethod?: PaymentMethod;
+  refundRef?: string;
+  approvedById: string;
+  createdAt: string;
+}
+
 export interface Invoice {
   id: string;
   code: string; // e.g. HD-20260921-001
   createdAt: string;
   cashierId: string;
   cashierName: string;
-  customerId?: string;
-  customerName?: string;
-  customerPhone?: string;
+  cashSessionId?: string;
   items: InvoiceItem[];
   subtotal: number;
   discountAmount: number;
   voucherCode?: string;
-  pointsUsed: number;
-  pointsEarned: number;
   finalTotal: number;
-  paymentMethod: 'cash' | 'transfer' | 'card';
-  receivedAmount: number;
-  changeAmount: number;
-  status: 'completed' | 'returned' | 'cancelled';
+  paymentMethod: PaymentMethod;
+  payments: InvoicePayment[];
+  receivedAmount: number; // tổng tiền khách đưa (gồm cả tiền thừa)
+  changeAmount: number; // tiền thối (chỉ phát sinh với tiền mặt)
+  paidAt?: string; // thời điểm thanh toán đủ; undefined = chưa xong
+  status: InvoiceStatus;
   notes?: string;
+  approvals?: InvoiceApproval[];
 }
 
-export interface Customer {
+// Bảng cash_sessions: ca thu ngân
+export interface CashSession {
   id: string;
-  code: string; // e.g. KH001
-  name: string;
-  phone: string;
-  email?: string;
-  points: number;
-  tier: 'Standard' | 'Silver' | 'Gold' | 'Diamond';
-  createdAt: string;
-  totalSpent: number;
+  code: string;
+  cashierId: string;
+  openedAt: string;
+  openingCash: number;
+  closedAt?: string;
+  expectedCash?: number; // openingCash + tiền mặt thu - tiền mặt hoàn
+  countedCash?: number;
+  difference?: number; // countedCash - expectedCash
+  differenceReason?: string;
+  reviewedById?: string;
+  status: CashSessionStatus;
 }
 
 export interface Staff {
@@ -97,22 +145,32 @@ export interface Staff {
   phone: string;
   email: string;
   username: string;
-  role: 'admin' | 'manager' | 'cashier' | 'warehouse';
-  status: 'active' | 'inactive';
-  shift: 'Sáng (06:00 - 14:00)' | 'Chiều (14:00 - 22:00)' | 'Hành chính';
+  password?: string; // chỉ dùng lúc tạo mới để gửi lên API (server băm bcrypt), không lưu lại ở client
+  role: StaffRole;
+  status: StaffStatus;
+  shift: Shift;
+  mustChangePassword?: boolean;
 }
 
 export interface Promotion {
   id: string;
-  code: string;
+  code: string; // mã chương trình / mã voucher
   name: string;
-  discountType: 'percentage' | 'fixed_amount';
+  description?: string;
+  scope: PromotionScope;
+  discountType: DiscountType;
   value: number;
+  maxDiscountAmount?: number; // trần giảm khi giảm theo %
   startDate: string;
   endDate: string;
   minOrderValue: number;
-  applicableCategory?: string;
-  status: 'active' | 'expired' | 'scheduled';
+  applicableCategory?: Category; // dùng khi scope = 'category'
+  nearExpiryDays?: number; // dùng khi scope = 'near_expiry'
+  productIds?: string[]; // bảng promotion_products, dùng khi scope = 'product'
+  requiresCode: boolean; // true: phải nhập mã; false: tự động áp dụng
+  usageLimit?: number;
+  usedCount: number;
+  status: PromotionStatus;
 }
 
 export interface Supplier {
@@ -124,7 +182,7 @@ export interface Supplier {
   email: string;
   address: string;
   categoryProvided: string;
-  status: 'active' | 'inactive';
+  status: SupplierStatus;
 }
 
 export interface PurchaseOrder {
@@ -142,15 +200,27 @@ export interface PurchaseOrder {
     subtotal: number;
   }[];
   totalAmount: number;
-  status: 'pending' | 'received' | 'cancelled';
+  status: PurchaseOrderStatus;
   notes?: string;
 }
 
 export interface StockAuditItem {
+  batchId?: string; // giao diện kiểm kê theo lô; server sẽ gộp theo productId khi lưu stock_audit_items
   productId: string;
   productName: string;
   systemQuantity: number;
   actualQuantity: number;
   difference: number;
   reason: string;
+}
+
+// Bảng stock_audits: phiếu kiểm kê, có bước quản lý duyệt
+export interface StockAudit {
+  id: string;
+  auditCode: string;
+  auditDate: string;
+  performedById: string;
+  approvedById?: string;
+  status: StockAuditStatus;
+  items: StockAuditItem[];
 }

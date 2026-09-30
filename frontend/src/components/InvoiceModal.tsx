@@ -1,6 +1,7 @@
 import React from 'react';
 import { Printer, X, CheckCircle, Milk, QrCode } from 'lucide-react';
 import { Invoice } from '../types';
+import { PAYMENT_METHOD_LABELS } from '../lib/labels';
 
 interface InvoiceModalProps {
   invoice: Invoice | null;
@@ -68,12 +69,6 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ invoice, onClose }) 
               <span>Thu ngân:</span>
               <span>{invoice.cashierName}</span>
             </div>
-            {invoice.customerName && (
-              <div className="flex justify-between text-sky-800 font-medium">
-                <span>Khách hàng TH Club:</span>
-                <span>{invoice.customerName} ({invoice.customerPhone})</span>
-              </div>
-            )}
           </div>
 
           {/* Items Table */}
@@ -114,13 +109,6 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ invoice, onClose }) 
               </div>
             )}
 
-            {invoice.pointsUsed > 0 && (
-              <div className="flex justify-between text-amber-600">
-                <span>Đổi điểm TH Point ({invoice.pointsUsed} điểm):</span>
-                <span>-{(invoice.pointsUsed * 1000).toLocaleString('vi-VN')} đ</span>
-              </div>
-            )}
-
             <div className="flex justify-between text-base font-extrabold text-[#004885] pt-1 border-t border-slate-300">
               <span>TỔNG THANH TOÁN:</span>
               <span>{invoice.finalTotal.toLocaleString('vi-VN')} đ</span>
@@ -128,15 +116,24 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ invoice, onClose }) 
 
             <div className="flex justify-between text-[11px] text-slate-500 pt-1">
               <span>Hình thức thanh toán:</span>
-              <span className="capitalize font-medium text-slate-700">
-                {invoice.paymentMethod === 'cash' ? 'Tiền mặt' : invoice.paymentMethod === 'transfer' ? 'Chuyển khoản VietQR' : 'Thẻ ngân hàng'}
-              </span>
+              <span className="font-medium text-slate-700">{PAYMENT_METHOD_LABELS[invoice.paymentMethod]}</span>
             </div>
 
-            {invoice.paymentMethod === 'cash' && (
+            {/* Từng khoản thanh toán (invoice_payments) */}
+            {invoice.payments.map(p => (
+              <div key={p.id} className="flex justify-between text-[11px] text-slate-600">
+                <span>
+                  - {PAYMENT_METHOD_LABELS[p.method]}
+                  {p.reference ? ` (${p.reference})` : ''}
+                </span>
+                <span>{p.amount.toLocaleString('vi-VN')} đ</span>
+              </div>
+            ))}
+
+            {invoice.changeAmount > 0 && (
               <>
                 <div className="flex justify-between text-[11px]">
-                  <span>Tiền khách đưa:</span>
+                  <span>Tổng tiền khách đưa:</span>
                   <span>{invoice.receivedAmount.toLocaleString('vi-VN')} đ</span>
                 </div>
                 <div className="flex justify-between text-[11px] font-semibold text-emerald-700">
@@ -144,12 +141,6 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ invoice, onClose }) 
                   <span>{invoice.changeAmount.toLocaleString('vi-VN')} đ</span>
                 </div>
               </>
-            )}
-
-            {invoice.pointsEarned > 0 && (
-              <div className="bg-sky-50 p-2 rounded text-sky-800 text-[11px] font-medium text-center mt-2 border border-sky-100">
-                ⭐ Tích lũy thêm +{invoice.pointsEarned} True Point cho lần mua sau!
-              </div>
             )}
           </div>
 

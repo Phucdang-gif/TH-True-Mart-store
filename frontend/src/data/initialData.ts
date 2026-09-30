@@ -1,11 +1,11 @@
-import { Product, Batch, Customer, Staff, Supplier, Promotion, Invoice, PurchaseOrder } from '../types';
+import { Product, Batch, Staff, Supplier, Promotion, Invoice, PurchaseOrder } from '../types';
 
 export const INITIAL_PRODUCTS: Product[] = [
   {
     id: 'prod-01',
     code: 'TH-MILK-001',
     name: 'Sữa tươi tiệt trùng TH true MILK Ít đường 180ml',
-    category: 'Sữa tươi tiệt trùng',
+    category: 'SUA_TUOI_TIET_TRUNG',
     unit: 'Lốc 4 hộp',
     sellingPrice: 38000,
     costPrice: 31000,
@@ -19,7 +19,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     id: 'prod-02',
     code: 'TH-MILK-002',
     name: 'Sữa tươi tiệt trùng TH true MILK Nguyên chất 180ml',
-    category: 'Sữa tươi tiệt trùng',
+    category: 'SUA_TUOI_TIET_TRUNG',
     unit: 'Thùng 48 hộp',
     sellingPrice: 435000,
     costPrice: 365000,
@@ -32,7 +32,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     id: 'prod-03',
     code: 'TH-MILK-003',
     name: 'Sữa tươi thanh trùng TH true MILK Nguyên chất 900ml',
-    category: 'Sữa tươi thanh trùng',
+    category: 'SUA_TUOI_THANH_TRUNG',
     unit: 'Chai 900ml',
     sellingPrice: 42000,
     costPrice: 33000,
@@ -45,7 +45,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     id: 'prod-04',
     code: 'TH-YOGURT-001',
     name: 'Sữa chua ăn TH true YOGURT Nha đam tự nhiên',
-    category: 'Sữa chua ăn & uống',
+    category: 'SUA_CHUA',
     unit: 'Vỉ 4 hộp',
     sellingPrice: 32000,
     costPrice: 24500,
@@ -59,7 +59,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     id: 'prod-05',
     code: 'TH-YOGURT-002',
     name: 'Sữa chua uống tiệt trùng TH true YOGURT Vị Dâu 180ml',
-    category: 'Sữa chua ăn & uống',
+    category: 'SUA_CHUA',
     unit: 'Lốc 4 hộp',
     sellingPrice: 36000,
     costPrice: 28000,
@@ -72,7 +72,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     id: 'prod-06',
     code: 'TH-CHEESE-001',
     name: 'Phô mai tự nhiên TH true CHEESE Mozzarella 200g',
-    category: 'Bơ & Phô mai tự nhiên',
+    category: 'BO_PHOMAI',
     unit: 'Gói 200g',
     sellingPrice: 78000,
     costPrice: 62000,
@@ -85,7 +85,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     id: 'prod-07',
     code: 'TH-BUTTER-001',
     name: 'Bơ lạt tự nhiên TH true BUTTER 100g',
-    category: 'Bơ & Phô mai tự nhiên',
+    category: 'BO_PHOMAI',
     unit: 'Hộp 100g',
     sellingPrice: 48000,
     costPrice: 38000,
@@ -98,7 +98,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     id: 'prod-08',
     code: 'TH-ICE-001',
     name: 'Kem que TH true ICE CREAM Socola tự nhiên 70g',
-    category: 'Kem TH true ICE CREAM',
+    category: 'KEM',
     unit: 'Cây 70g',
     sellingPrice: 22000,
     costPrice: 16000,
@@ -111,7 +111,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     id: 'prod-09',
     code: 'TH-WATER-001',
     name: 'Nước tinh khiết TH true WATER 500ml',
-    category: 'Nước tinh khiết & Nước trái cây',
+    category: 'NUOC',
     unit: 'Chai 500ml',
     sellingPrice: 6000,
     costPrice: 3500,
@@ -124,7 +124,7 @@ export const INITIAL_PRODUCTS: Product[] = [
     id: 'prod-10',
     code: 'TH-TEA-001',
     name: 'Trà tự nhiên TH true TEA Ô Long tự nhiên 350ml',
-    category: 'Trà tự nhiên TH true TEA',
+    category: 'TRA',
     unit: 'Chai 350ml',
     sellingPrice: 11000,
     costPrice: 7500,
@@ -218,52 +218,6 @@ export const INITIAL_BATCHES: Batch[] = [
   }
 ];
 
-export const INITIAL_CUSTOMERS: Customer[] = [
-  {
-    id: 'cust-01',
-    code: 'KH-0001',
-    name: 'Nguyễn Thị Mai Lan',
-    phone: '0987654321',
-    email: 'mailan.nguyen@gmail.com',
-    points: 420,
-    tier: 'Gold',
-    createdAt: '2025-01-15',
-    totalSpent: 4200000
-  },
-  {
-    id: 'cust-02',
-    code: 'KH-0002',
-    name: 'Trần Văn Hưng',
-    phone: '0912345678',
-    email: 'hung.tran@gmail.com',
-    points: 150,
-    tier: 'Silver',
-    createdAt: '2025-03-20',
-    totalSpent: 1500000
-  },
-  {
-    id: 'cust-03',
-    code: 'KH-0003',
-    name: 'Lê Hoàng Yến',
-    phone: '0909888999',
-    email: 'hoangyen.le@outlook.com',
-    points: 850,
-    tier: 'Diamond',
-    createdAt: '2024-11-10',
-    totalSpent: 8500000
-  },
-  {
-    id: 'cust-04',
-    code: 'KH-0004',
-    name: 'Phạm Đức Minh',
-    phone: '0933112233',
-    points: 60,
-    tier: 'Standard',
-    createdAt: '2026-08-05',
-    totalSpent: 600000
-  }
-];
-
 export const INITIAL_STAFF: Staff[] = [
   {
     id: 'staff-01',
@@ -272,9 +226,9 @@ export const INITIAL_STAFF: Staff[] = [
     phone: '0978111222',
     email: 'danghoangphuc2006@gmail.com',
     username: 'admin',
-    role: 'admin',
+    role: 'manager',
     status: 'active',
-    shift: 'Hành chính'
+    shift: 'HANH_CHINH'
   },
   {
     id: 'staff-02',
@@ -285,7 +239,7 @@ export const INITIAL_STAFF: Staff[] = [
     username: 'thutrang',
     role: 'manager',
     status: 'active',
-    shift: 'Sáng (06:00 - 14:00)'
+    shift: 'SANG'
   },
   {
     id: 'staff-03',
@@ -296,7 +250,7 @@ export const INITIAL_STAFF: Staff[] = [
     username: 'tuannv',
     role: 'cashier',
     status: 'active',
-    shift: 'Chiều (14:00 - 22:00)'
+    shift: 'CHIEU'
   },
   {
     id: 'staff-04',
@@ -307,7 +261,7 @@ export const INITIAL_STAFF: Staff[] = [
     username: 'baohq',
     role: 'warehouse',
     status: 'active',
-    shift: 'Sáng (06:00 - 14:00)'
+    shift: 'SANG'
   }
 ];
 
@@ -316,23 +270,29 @@ export const INITIAL_PROMOTIONS: Promotion[] = [
     id: 'promo-01',
     code: 'THSUMMER10',
     name: 'Mùa Hè Tươi Sạch Giảm 10% Sữa Chua',
+    scope: 'category',
     discountType: 'percentage',
     value: 10,
     startDate: '2026-09-01',
     endDate: '2026-09-30',
     minOrderValue: 100000,
-    applicableCategory: 'Sữa chua ăn & uống',
+    applicableCategory: 'SUA_CHUA',
+    requiresCode: false,
+    usedCount: 0,
     status: 'active'
   },
   {
     id: 'promo-02',
     code: 'THVIP20K',
     name: 'Ưu đãi hóa đơn từ 200k giảm 20.000đ',
+    scope: 'order',
     discountType: 'fixed_amount',
     value: 20000,
     startDate: '2026-09-15',
     endDate: '2026-10-15',
     minOrderValue: 200000,
+    requiresCode: true,
+    usedCount: 1,
     status: 'active'
   }
 ];
@@ -380,9 +340,6 @@ export const INITIAL_INVOICES: Invoice[] = [
     createdAt: '2026-09-21 08:35:12',
     cashierId: 'staff-03',
     cashierName: 'Nguyễn Văn Tuấn',
-    customerId: 'cust-01',
-    customerName: 'Nguyễn Thị Mai Lan',
-    customerPhone: '0987654321',
     items: [
       {
         productId: 'prod-01',
@@ -409,12 +366,22 @@ export const INITIAL_INVOICES: Invoice[] = [
     ],
     subtotal: 172000,
     discountAmount: 13400,
-    pointsUsed: 0,
-    pointsEarned: 15,
     finalTotal: 158600,
     paymentMethod: 'transfer',
+    payments: [
+      {
+        id: 'pay-01',
+        method: 'transfer',
+        amount: 158600,
+        status: 'confirmed',
+        reference: 'VCB-FT26092108351',
+        confirmedById: 'staff-03',
+        confirmedAt: '2026-09-21 08:36:00'
+      }
+    ],
     receivedAmount: 158600,
     changeAmount: 0,
+    paidAt: '2026-09-21 08:36:00',
     status: 'completed',
     notes: 'Khách hàng thanh toán qua VietQR Vietcombank'
   },
@@ -424,9 +391,6 @@ export const INITIAL_INVOICES: Invoice[] = [
     createdAt: '2026-09-21 09:12:40',
     cashierId: 'staff-03',
     cashierName: 'Nguyễn Văn Tuấn',
-    customerId: 'cust-03',
-    customerName: 'Lê Hoàng Yến',
-    customerPhone: '0909888999',
     items: [
       {
         productId: 'prod-02',
@@ -454,12 +418,21 @@ export const INITIAL_INVOICES: Invoice[] = [
     subtotal: 591000,
     discountAmount: 20000,
     voucherCode: 'THVIP20K',
-    pointsUsed: 50, // 50 điểm = 50.000đ
-    pointsEarned: 52,
-    finalTotal: 521000,
+    finalTotal: 571000,
     paymentMethod: 'cash',
+    payments: [
+      {
+        id: 'pay-02',
+        method: 'cash',
+        amount: 571000,
+        status: 'confirmed',
+        confirmedById: 'staff-03',
+        confirmedAt: '2026-09-21 09:13:00'
+      }
+    ],
     receivedAmount: 600000,
-    changeAmount: 79000,
+    changeAmount: 29000,
+    paidAt: '2026-09-21 09:13:00',
     status: 'completed'
   }
 ];

@@ -12,20 +12,28 @@ import {
   CheckCircle2,
   X
 } from 'lucide-react';
-import { Product, Batch, StockAuditItem } from '../../types';
+import { Product, Batch, StockAudit, StockAuditItem, Staff } from '../../types';
 
 interface QuanLyKhoProps {
   products: Product[];
   batches: Batch[];
   onAddBatch: (batch: Batch) => void;
   onAdjustStock: (batchId: string, newQuantity: number, reason: string) => void;
+  currentStaff: Staff; // người nhập kho / kiểm kê / duyệt
+  audits: StockAudit[]; // phiếu kiểm kê (stock_audits)
+  onSubmitAudit: (audit: StockAudit) => void;
+  onReviewAudit: (auditId: string, approved: boolean, approverId: string) => void;
 }
 
 export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
   products,
   batches,
   onAddBatch,
-  onAdjustStock
+  onAdjustStock,
+  currentStaff,
+  audits,
+  onSubmitAudit,
+  onReviewAudit
 }) => {
   const [activeTab, setActiveTab] = useState<'batches' | 'alerts' | 'import' | 'audit'>('batches');
   const [search, setSearch] = useState('');
@@ -83,7 +91,8 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
       expiryDate: expDate,
       quantity: Number(importQty),
       importPrice: Number(importPrice),
-      status: days <= 30 ? 'expiring_soon' : 'good'
+      status: days < 0 ? 'expired' : days <= 30 ? 'expiring_soon' : 'good',
+      receivedById: currentStaff.id
     };
 
     onAddBatch(newBatch);
@@ -317,7 +326,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
             </div>
             {auditSaved && (
               <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-lg border border-emerald-200 flex items-center gap-1">
-                <CheckCircle2 className="w-3.5 h-3.5" /> Đã cân bằng và lưu phiếu kiểm kê!
+                <CheckCircle2 className="w-3.5 h-3.5" /> Đã gửi phiếu kiểm kê, chờ quản lý duyệt!
               </span>
             )}
           </div>
@@ -376,14 +385,80 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
           <div className="flex justify-end pt-3 border-t border-slate-100">
             <button
               onClick={() => {
+                const items: StockAuditItem[] = batches.slice(0, 6).map(b => {
+                  const actual = auditItems[b.id] !== undefined ? auditItems[b.id] : b.quantity;
+                  const diff = actual - b.quantity;
+                  return {
+                    batchId: b.id,
+                    productId: b.productId,
+                    productName: products.find(p => p.id === b.productId)?.name || '',
+                    systemQuantity: b.quantity,
+                    actualQuantity: actual,
+                    difference: diff,
+                    reason: diff < 0 ? 'Bao bì móp méo / vỡ hỏng' : diff > 0 ? 'Thừa khi nhập hàng' : 'Khớp'
+                  };
+                });
+                const now = new Date();
+                onSubmitAudit({
+                  id: `audit-${now.getTime()}`,
+                  auditCode: `KK-${now.toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(10 + Math.random() * 90)}`,
+                  auditDate: now.toLocaleString('vi-VN'),
+                  performedById: currentStaff.id,
+                  status: 'pending_approval', // chờ quản lý duyệt, tồn kho CHƯA đổi
+                  items
+                });
+                setAuditItems({});
                 setAuditSaved(true);
                 setTimeout(() => setAuditSaved(false), 3000);
               }}
               className="px-4 py-2 bg-[#004885] hover:bg-[#00386b] text-white rounded-lg text-xs font-bold shadow-xs"
             >
-              Hoàn tất kiểm kê & Cập nhật kho
+              Gửi phiếu kiểm kê chờ quản lý duyệt
             </button>
           </div>
+
+          {/* Danh sách phiếu kiểm kê & bước quản lý duyệt (stock_audits) */}
+          {audits.length > 0 && (
+            <div className="space-y-2 pt-3 border-t border-slate-100">
+              <h4 className="font-bold text-xs text-slate-900">Phiếu kiểm kê đã lập ({audits.length})</h4>
+              {audits.map(a => {
+                const totalDiff = a.items.reduce((acc, i) => acc + i.difference, 0);
+                const statusLabel = {
+                  draft: 'Nháp',
+                  pending_approval: 'Chờ duyệt',
+                  approved: 'Đã duyệt',
+                  rejected: 'Từ chối'
+                }[a.status];
+                return (
+                  <div key={a.id} className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs">
+                    <div>
+                      <span className="font-mono font-bold text-[#004885]">{a.auditCode}</span>
+                      <span className="text-slate-500"> • {a.auditDate} • {a.items.length} dòng • Chênh lệch: {totalDiff > 0 ? `+${totalDiff}` : totalDiff}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-700">{statusLabel}</span>
+                      {a.status === 'pending_approval' && currentStaff.role === 'manager' && (
+                        <>
+                          <button
+                            onClick={() => onReviewAudit(a.id, true, currentStaff.id)}
+                            className="px-2 py-1 rounded bg-emerald-600 text-white font-bold"
+                          >
+                            Duyệt
+                          </button>
+                          <button
+                            onClick={() => onReviewAudit(a.id, false, currentStaff.id)}
+                            className="px-2 py-1 rounded bg-rose-50 text-rose-700 font-bold"
+                          >
+                            Từ chối
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 

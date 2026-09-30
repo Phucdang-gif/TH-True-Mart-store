@@ -4,7 +4,6 @@ import {
   ShoppingCart, 
   Package, 
   Warehouse, 
-  Users, 
   UserCheck, 
   Truck, 
   BarChart3, 
@@ -40,10 +39,9 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 1, name: '1. Bán hàng (POS)', icon: ShoppingCart },
     { id: 2, name: '2. Hàng hóa & Giá', icon: Package },
     { id: 3, name: '3. Quản lý kho', icon: Warehouse, badge: expiringCount > 0 ? expiringCount : null },
-    { id: 4, name: '4. Khách hàng (TH Club)', icon: Users },
-    { id: 5, name: '5. Nhân viên & Ca làm', icon: UserCheck },
-    { id: 6, name: '6. Nhà cung cấp', icon: Truck },
-    { id: 7, name: '7. Báo cáo thống kê', icon: BarChart3 },
+    { id: 4, name: '4. Nhân viên & Ca làm', icon: UserCheck },
+    { id: 5, name: '5. Nhà cung cấp', icon: Truck },
+    { id: 6, name: '6. Báo cáo thống kê', icon: BarChart3 },
   ];
 
   return (
@@ -84,7 +82,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
       </div>
 
-      {/* Secondary Navigation: 7 Modules from the BFD */}
+      {/* Secondary Navigation: 6 Modules */}
       <div className="bg-slate-50 border-b border-slate-200 overflow-x-auto scrollbar-none">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 flex space-x-1 py-1.5">
           {bfdModules.map((module) => {

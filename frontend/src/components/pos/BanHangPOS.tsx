@@ -10,29 +10,29 @@ import {
   QrCode, 
   Sparkles, 
   Tag, 
-  UserCheck, 
   RotateCcw, 
   XCircle,
   Eye,
   AlertTriangle
 } from 'lucide-react';
-import { Product, Batch, Customer, Promotion, Invoice, CartItem } from '../../types';
+import { Product, Batch, Promotion, Invoice, InvoicePayment, InvoiceApproval, CartItem, Staff, PaymentMethod } from '../../types';
+import { CATEGORY_LABELS, CATEGORY_LIST, INVOICE_STATUS_LABELS, PAYMENT_METHOD_LABELS } from '../../lib/labels';
 
 interface BanHangPOSProps {
   products: Product[];
   batches: Batch[];
-  customers: Customer[];
+  currentStaff: Staff; // nhân viên đang đăng nhập (thu ngân / quản lý)
   promotions: Promotion[];
   invoices: Invoice[];
   onCompleteSale: (invoice: Invoice) => void;
-  onReturnInvoice: (invoiceId: string, reason: string) => void;
-  onCancelInvoice: (invoiceId: string, reason: string) => void;
+  onReturnInvoice: (invoiceId: string, approval: Omit<InvoiceApproval, 'id' | 'createdAt' | 'action'>) => void;
+  onCancelInvoice: (invoiceId: string, approval: Omit<InvoiceApproval, 'id' | 'createdAt' | 'action'>) => void;
 }
 
 export const BanHangPOS: React.FC<BanHangPOSProps> = ({
   products,
   batches,
-  customers,
+  currentStaff,
   promotions,
   invoices,
   onCompleteSale,
@@ -45,16 +45,16 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
   const [cart, setCart] = useState<CartItem[]>([]);
   const [barcodeInput, setBarcodeInput] = useState('');
   
-  // Customer & Promotion state
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-  const [customerSearch, setCustomerSearch] = useState('');
+  // Promotion state
   const [promoCode, setPromoCode] = useState('');
   const [appliedPromo, setAppliedPromo] = useState<Promotion | null>(null);
-  const [usePoints, setUsePoints] = useState(false);
   
-  // Payment state
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'transfer' | 'card'>('cash');
+  // Payment state: thanh toán nhiều hình thức (bảng invoice_payments)
   const [cashGiven, setCashGiven] = useState<number>(0);
+  const [transferAmount, setTransferAmount] = useState<number>(0);
+  const [transferRef, setTransferRef] = useState('');
+  const [cardAmount, setCardAmount] = useState<number>(0);
+  const [cardRef, setCardRef] = useState('');
   const [notes, setNotes] = useState('');
   const [barcodeSuccessMsg, setBarcodeSuccessMsg] = useState<string | null>(null);
 
@@ -62,18 +62,12 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
   const [selectedInvoiceForAction, setSelectedInvoiceForAction] = useState<Invoice | null>(null);
   const [actionType, setActionType] = useState<'return' | 'cancel' | null>(null);
   const [actionReason, setActionReason] = useState('');
+  const [refundMethod, setRefundMethod] = useState<PaymentMethod>('cash');
+  const [refundRef, setRefundRef] = useState('');
+  const isManager = currentStaff.role === 'manager'; // quyền invoice:approve
 
-  // Categories list
-  const categories = [
-    'all',
-    'Sữa tươi tiệt trùng',
-    'Sữa tươi thanh trùng',
-    'Sữa chua ăn & uống',
-    'Bơ & Phô mai tự nhiên',
-    'Kem TH true ICE CREAM',
-    'Nước tinh khiết & Nước trái cây',
-    'Trà tự nhiên TH true TEA'
-  ];
+  // Categories list (mã enum của DB)
+  const categories: string[] = ['all', ...CATEGORY_LIST];
 
   // Filter products
   const filteredProducts = products.filter(p => {
@@ -154,29 +148,38 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
   const subtotal = cart.reduce((acc, item) => acc + (item.unitPrice * item.quantity), 0);
   const itemDiscounts = cart.reduce((acc, item) => acc + (item.discount * item.quantity), 0);
 
-  // Voucher discount
+  // Voucher discount (theo promotions.discountType, có trần maxDiscountAmount khi giảm %)
   let voucherDiscount = 0;
   if (appliedPromo) {
     if (appliedPromo.discountType === 'percentage') {
       voucherDiscount = (subtotal * appliedPromo.value) / 100;
+      if (appliedPromo.maxDiscountAmount) {
+        voucherDiscount = Math.min(voucherDiscount, appliedPromo.maxDiscountAmount);
+      }
     } else {
       voucherDiscount = appliedPromo.value;
     }
   }
 
-  // Customer Points discount (1 point = 1.000đ)
-  const maxUsablePoints = selectedCustomer ? Math.min(selectedCustomer.points, Math.floor((subtotal - itemDiscounts - voucherDiscount) / 1000)) : 0;
-  const pointsDiscount = usePoints && selectedCustomer ? Math.max(0, maxUsablePoints * 1000) : 0;
-
-  const totalDiscount = itemDiscounts + voucherDiscount + pointsDiscount;
+  const totalDiscount = itemDiscounts + voucherDiscount;
   const finalTotal = Math.max(0, subtotal - totalDiscount);
-  const changeAmount = Math.max(0, cashGiven - finalTotal);
+
+  // Tổng hợp các khoản thanh toán: chuyển khoản/thẻ không được vượt phần còn lại, tiền mặt được đưa dư để thối
+  const nonCashPaid = transferAmount + cardAmount;
+  const cashDue = Math.max(0, finalTotal - nonCashPaid); // phần phải trả bằng tiền mặt
+  const totalReceived = cashGiven + nonCashPaid;
+  const changeAmount = Math.max(0, totalReceived - finalTotal);
+  const isPaidEnough = totalReceived >= finalTotal && nonCashPaid <= finalTotal;
 
   // Handle Apply Promo
   const handleApplyPromo = () => {
     const promo = promotions.find(p => p.code.toUpperCase() === promoCode.trim().toUpperCase() && p.status === 'active');
     if (!promo) {
-      alert('Mã khuyến mãi không hợp lệ hoặc đã hết hạn!');
+      alert('Mã khuyến mãi không hợp lệ hoặc chương trình không còn hoạt động!');
+      return;
+    }
+    if (promo.usageLimit && promo.usedCount >= promo.usageLimit) {
+      alert('Mã khuyến mãi đã hết lượt sử dụng!');
       return;
     }
     if (subtotal < promo.minOrderValue) {
@@ -192,27 +195,52 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
       alert('Giỏ hàng trống! Vui lòng chọn sản phẩm.');
       return;
     }
-    if (paymentMethod === 'cash' && cashGiven < finalTotal) {
-      alert('Số tiền khách đưa chưa đủ để thanh toán!');
+    if (nonCashPaid > finalTotal) {
+      alert('Tổng chuyển khoản + thẻ không được vượt quá số tiền phải trả!');
+      return;
+    }
+    if (!isPaidEnough) {
+      alert('Số tiền thanh toán chưa đủ! Hóa đơn chỉ hoàn tất khi tổng các khoản đã nhận >= số tiền phải trả.');
+      return;
+    }
+    if ((transferAmount > 0 && !transferRef.trim())) {
+      alert('Vui lòng nhập mã giao dịch chuyển khoản để xác nhận đã nhận tiền!');
+      return;
+    }
+    if ((cardAmount > 0 && !cardRef.trim())) {
+      alert('Vui lòng nhập mã chuẩn chi thẻ!');
       return;
     }
 
+    const nowStr = new Date().toLocaleString('vi-VN');
+    const stamp = Date.now();
     const newInvoiceCode = `HD-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${Math.floor(100 + Math.random() * 900)}`;
-    const earnedPoints = Math.floor(finalTotal / 10000); // 10k = 1 point
+
+    // Tách từng khoản thanh toán; tiền mặt ghi nhận sau khi trừ tiền thối
+    const cashApplied = Math.min(cashGiven, cashDue);
+    const payments: InvoicePayment[] = [];
+    if (cashApplied > 0) {
+      payments.push({ id: `pay-${stamp}-c`, method: 'cash', amount: cashApplied, status: 'confirmed', confirmedById: currentStaff.id, confirmedAt: nowStr });
+    }
+    if (transferAmount > 0) {
+      payments.push({ id: `pay-${stamp}-t`, method: 'transfer', amount: transferAmount, status: 'confirmed', reference: transferRef.trim(), confirmedById: currentStaff.id, confirmedAt: nowStr });
+    }
+    if (cardAmount > 0) {
+      payments.push({ id: `pay-${stamp}-k`, method: 'card', amount: cardAmount, status: 'confirmed', reference: cardRef.trim(), confirmedById: currentStaff.id, confirmedAt: nowStr });
+    }
+    const paymentMethod: PaymentMethod = payments.length > 1 ? 'mixed' : payments[0]?.method ?? 'cash';
 
     const newInvoice: Invoice = {
-      id: `inv-${Date.now()}`,
+      id: `inv-${stamp}`,
       code: newInvoiceCode,
-      createdAt: new Date().toLocaleString('vi-VN'),
-      cashierId: 'staff-01',
-      cashierName: 'Đặng Hoàng Phúc (Admin)',
-      customerId: selectedCustomer?.id,
-      customerName: selectedCustomer?.name,
-      customerPhone: selectedCustomer?.phone,
+      createdAt: nowStr,
+      cashierId: currentStaff.id,
+      cashierName: currentStaff.name,
       items: cart.map(item => ({
         productId: item.product.id,
         productCode: item.product.code,
         productName: item.product.name,
+        batchId: item.selectedBatch?.id,
         batchCode: item.selectedBatch?.batchCode || 'LOTH-DEFAULT',
         unit: item.product.unit,
         quantity: item.quantity,
@@ -223,12 +251,12 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
       subtotal,
       discountAmount: totalDiscount,
       voucherCode: appliedPromo?.code,
-      pointsUsed: usePoints ? maxUsablePoints : 0,
-      pointsEarned: earnedPoints,
       finalTotal,
       paymentMethod,
-      receivedAmount: paymentMethod === 'cash' ? cashGiven : finalTotal,
-      changeAmount: paymentMethod === 'cash' ? changeAmount : 0,
+      payments,
+      receivedAmount: totalReceived,
+      changeAmount,
+      paidAt: nowStr,
       status: 'completed',
       notes
     };
@@ -239,9 +267,11 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
     setCart([]);
     setAppliedPromo(null);
     setPromoCode('');
-    setSelectedCustomer(null);
-    setUsePoints(false);
     setCashGiven(0);
+    setTransferAmount(0);
+    setTransferRef('');
+    setCardAmount(0);
+    setCardRef('');
     setNotes('');
   };
 
@@ -336,7 +366,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                         : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                     }`}
                   >
-                    {cat === 'all' ? 'Tất cả sản phẩm TH' : cat}
+                    {cat === 'all' ? 'Tất cả sản phẩm TH' : CATEGORY_LABELS[cat as keyof typeof CATEGORY_LABELS]}
                   </button>
                 ))}
               </div>
@@ -476,75 +506,6 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                 )}
               </div>
 
-              {/* Customer TH Club Lookup (1.3 & 4.2) */}
-              <div className="border-t border-slate-100 pt-3 space-y-2">
-                <label className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
-                  <UserCheck className="w-3.5 h-3.5 text-[#004885]" />
-                  <span>Khách hàng thành viên (TH Club)</span>
-                </label>
-                {selectedCustomer ? (
-                  <div className="bg-sky-50 p-2.5 rounded-lg border border-sky-200 flex items-center justify-between">
-                    <div>
-                      <p className="text-xs font-bold text-sky-950">
-                        {selectedCustomer.name} - {selectedCustomer.phone}
-                      </p>
-                      <p className="text-[10px] text-sky-800">
-                        Hạng: <span className="font-bold">{selectedCustomer.tier}</span> | Điểm khả dụng: <span className="font-bold text-emerald-700">{selectedCustomer.points}</span>
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => {
-                        setSelectedCustomer(null);
-                        setUsePoints(false);
-                      }}
-                      className="text-xs text-slate-400 hover:text-rose-600 font-bold"
-                    >
-                      Bỏ chọn
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex gap-1.5">
-                    <input
-                      type="text"
-                      placeholder="Nhập số điện thoại khách hàng..."
-                      value={customerSearch}
-                      onChange={(e) => setCustomerSearch(e.target.value)}
-                      className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-hidden focus:bg-white"
-                    />
-                    <button
-                      onClick={() => {
-                        const found = customers.find(c => c.phone.includes(customerSearch.trim()) || c.name.toLowerCase().includes(customerSearch.toLowerCase()));
-                        if (found) {
-                          setSelectedCustomer(found);
-                          setCustomerSearch('');
-                        } else {
-                          alert('Không tìm thấy khách hàng! Vui lòng kiểm tra lại số điện thoại.');
-                        }
-                      }}
-                      className="bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs px-3 py-1.5 rounded-lg font-semibold"
-                    >
-                      Tìm
-                    </button>
-                  </div>
-                )}
-
-                {selectedCustomer && selectedCustomer.points > 0 && (
-                  <div className="flex items-center justify-between bg-amber-50 px-3 py-1.5 rounded border border-amber-200 text-xs">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={usePoints}
-                        onChange={(e) => setUsePoints(e.target.checked)}
-                        className="rounded text-[#004885]"
-                      />
-                      <span className="text-amber-900 font-medium">
-                        Đổi {maxUsablePoints} điểm True Point (-{(maxUsablePoints * 1000).toLocaleString('vi-VN')} đ)
-                      </span>
-                    </label>
-                  </div>
-                )}
-              </div>
-
               {/* Promotion Voucher (1.3) */}
               <div className="border-t border-slate-100 pt-3 space-y-2">
                 <label className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
@@ -565,7 +526,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                   <div className="flex gap-1.5">
                     <input
                       type="text"
-                      placeholder="Nhập mã THSUMMER10, THVIP20K..."
+                      placeholder="Nhập mã voucher (VD: THVIP20K)..."
                       value={promoCode}
                       onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
                       className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-hidden focus:bg-white font-mono uppercase"
@@ -580,85 +541,93 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                 )}
               </div>
 
-              {/* Payment Methods */}
+              {/* Thanh toán nhiều hình thức (tiền mặt + chuyển khoản + thẻ) */}
               <div className="border-t border-slate-100 pt-3 space-y-2">
-                <label className="text-[11px] font-bold text-slate-700">Phương thức thanh toán</label>
-                <div className="grid grid-cols-3 gap-2">
-                  <button
-                    onClick={() => setPaymentMethod('cash')}
-                    className={`p-2 rounded-lg border text-xs font-semibold flex flex-col items-center gap-1 transition-all ${
-                      paymentMethod === 'cash'
-                        ? 'border-[#004885] bg-sky-50 text-[#004885]'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    <Banknote className="w-4 h-4" />
-                    <span>Tiền mặt</span>
-                  </button>
-                  <button
-                    onClick={() => setPaymentMethod('transfer')}
-                    className={`p-2 rounded-lg border text-xs font-semibold flex flex-col items-center gap-1 transition-all ${
-                      paymentMethod === 'transfer'
-                        ? 'border-[#004885] bg-sky-50 text-[#004885]'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    <QrCode className="w-4 h-4" />
-                    <span>VietQR</span>
-                  </button>
-                  <button
-                    onClick={() => setPaymentMethod('card')}
-                    className={`p-2 rounded-lg border text-xs font-semibold flex flex-col items-center gap-1 transition-all ${
-                      paymentMethod === 'card'
-                        ? 'border-[#004885] bg-sky-50 text-[#004885]'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    <CreditCard className="w-4 h-4" />
-                    <span>Thẻ POS</span>
-                  </button>
+                <label className="text-[11px] font-bold text-slate-700">Thanh toán (có thể kết hợp nhiều hình thức)</label>
+
+                {/* Chuyển khoản */}
+                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-600 flex items-center gap-1.5"><QrCode className="w-4 h-4" /> Chuyển khoản (VietQR):</span>
+                    <input
+                      type="number"
+                      value={transferAmount || ''}
+                      onChange={(e) => setTransferAmount(Math.max(0, Number(e.target.value)))}
+                      placeholder="Số tiền..."
+                      className="w-32 px-2 py-1 bg-white border border-slate-300 rounded text-right font-bold text-xs"
+                    />
+                  </div>
+                  {transferAmount > 0 && (
+                    <input
+                      type="text"
+                      value={transferRef}
+                      onChange={(e) => setTransferRef(e.target.value)}
+                      placeholder="Mã giao dịch chuyển khoản (đã nhận tiền)..."
+                      className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs font-mono"
+                    />
+                  )}
                 </div>
 
-                {paymentMethod === 'cash' && (
-                  <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 space-y-2">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-slate-600">Tiền khách đưa:</span>
-                      <input
-                        type="number"
-                        value={cashGiven || ''}
-                        onChange={(e) => setCashGiven(Number(e.target.value))}
-                        placeholder="Nhập số tiền..."
-                        className="w-32 px-2 py-1 bg-white border border-slate-300 rounded text-right font-bold text-xs"
-                      />
-                    </div>
-                    {/* Fast Denominations */}
-                    <div className="flex gap-1 justify-end">
-                      {[100000, 200000, 500000].map(amt => (
-                        <button
-                          key={amt}
-                          onClick={() => setCashGiven(amt)}
-                          className="px-2 py-0.5 text-[10px] bg-white border border-slate-300 rounded hover:bg-slate-100 font-medium"
-                        >
-                          {(amt / 1000)}k
-                        </button>
-                      ))}
-                      <button
-                        onClick={() => setCashGiven(finalTotal)}
-                        className="px-2 py-0.5 text-[10px] bg-sky-100 text-sky-800 rounded font-bold"
-                      >
-                        Đủ tiền
-                      </button>
-                    </div>
-                    {cashGiven > 0 && (
-                      <div className="flex justify-between text-xs font-semibold border-t border-slate-200 pt-1">
-                        <span>Tiền thừa trả khách:</span>
-                        <span className={cashGiven >= finalTotal ? 'text-emerald-700' : 'text-rose-600'}>
-                          {changeAmount.toLocaleString('vi-VN')} đ
-                        </span>
-                      </div>
-                    )}
+                {/* Thẻ */}
+                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-600 flex items-center gap-1.5"><CreditCard className="w-4 h-4" /> Thẻ POS:</span>
+                    <input
+                      type="number"
+                      value={cardAmount || ''}
+                      onChange={(e) => setCardAmount(Math.max(0, Number(e.target.value)))}
+                      placeholder="Số tiền..."
+                      className="w-32 px-2 py-1 bg-white border border-slate-300 rounded text-right font-bold text-xs"
+                    />
                   </div>
-                )}
+                  {cardAmount > 0 && (
+                    <input
+                      type="text"
+                      value={cardRef}
+                      onChange={(e) => setCardRef(e.target.value)}
+                      placeholder="Mã chuẩn chi thẻ..."
+                      className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs font-mono"
+                    />
+                  )}
+                </div>
+
+                {/* Tiền mặt */}
+                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-600 flex items-center gap-1.5"><Banknote className="w-4 h-4" /> Tiền mặt khách đưa:</span>
+                    <input
+                      type="number"
+                      value={cashGiven || ''}
+                      onChange={(e) => setCashGiven(Math.max(0, Number(e.target.value)))}
+                      placeholder="Nhập số tiền..."
+                      className="w-32 px-2 py-1 bg-white border border-slate-300 rounded text-right font-bold text-xs"
+                    />
+                  </div>
+                  <div className="flex gap-1 justify-end">
+                    {[100000, 200000, 500000].map(amt => (
+                      <button
+                        key={amt}
+                        onClick={() => setCashGiven(amt)}
+                        className="px-2 py-0.5 text-[10px] bg-white border border-slate-300 rounded hover:bg-slate-100 font-medium"
+                      >
+                        {(amt / 1000)}k
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => setCashGiven(cashDue)}
+                      className="px-2 py-0.5 text-[10px] bg-sky-100 text-sky-800 rounded font-bold"
+                    >
+                      Đủ tiền
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex justify-between text-xs font-semibold border-t border-slate-200 pt-1">
+                  <span>{isPaidEnough ? 'Tiền thừa trả khách:' : 'Còn thiếu:'}</span>
+                  <span className={isPaidEnough ? 'text-emerald-700' : 'text-rose-600'}>
+                    {(isPaidEnough ? changeAmount : Math.max(0, finalTotal - totalReceived)).toLocaleString('vi-VN')} đ
+                  </span>
+                </div>
               </div>
 
               {/* Order Summary Breakdown */}
@@ -683,7 +652,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
               <button
                 id="btn-checkout-sale"
                 onClick={handleCheckout}
-                disabled={cart.length === 0}
+                disabled={cart.length === 0 || !isPaidEnough}
                 className="w-full py-3 rounded-xl bg-[#004885] hover:bg-[#00386b] disabled:bg-slate-300 text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed"
               >
                 <span>Hoàn tất & In hóa đơn</span>
@@ -709,7 +678,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                   <th className="py-2.5 px-3">Mã HĐ</th>
                   <th className="py-2.5 px-3">Thời gian</th>
                   <th className="py-2.5 px-3">Thu ngân</th>
-                  <th className="py-2.5 px-3">Khách hàng</th>
+                  <th className="py-2.5 px-3">Thanh toán</th>
                   <th className="py-2.5 px-3">Số món</th>
                   <th className="py-2.5 px-3 text-right">Tổng thanh toán</th>
                   <th className="py-2.5 px-3 text-center">Trạng thái</th>
@@ -722,9 +691,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                     <td className="py-2.5 px-3 font-bold text-[#004885]">{inv.code}</td>
                     <td className="py-2.5 px-3 text-slate-600">{inv.createdAt}</td>
                     <td className="py-2.5 px-3 text-slate-800">{inv.cashierName}</td>
-                    <td className="py-2.5 px-3 text-slate-700">
-                      {inv.customerName ? `${inv.customerName} (${inv.customerPhone})` : 'Khách vãng lai'}
-                    </td>
+                    <td className="py-2.5 px-3 text-slate-700">{PAYMENT_METHOD_LABELS[inv.paymentMethod]}</td>
                     <td className="py-2.5 px-3 text-slate-600">{inv.items.length} mặt hàng</td>
                     <td className="py-2.5 px-3 text-right font-bold text-slate-900">
                       {inv.finalTotal.toLocaleString('vi-VN')} đ
@@ -732,9 +699,11 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                     <td className="py-2.5 px-3 text-center">
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                         inv.status === 'completed' ? 'bg-emerald-100 text-emerald-800' :
-                        inv.status === 'returned' ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800'
+                        inv.status === 'returned' ? 'bg-amber-100 text-amber-800' :
+                        inv.status === 'pending_payment' || inv.status === 'pending_approval' ? 'bg-sky-100 text-sky-800' :
+                        'bg-rose-100 text-rose-800'
                       }`}>
-                        {inv.status === 'completed' ? 'Đã hoàn tất' : inv.status === 'returned' ? 'Đã đổi trả' : 'Đã hủy'}
+                        {INVOICE_STATUS_LABELS[inv.status]}
                       </span>
                     </td>
                     <td className="py-2.5 px-3 text-right space-x-1.5 whitespace-nowrap">
@@ -799,6 +768,40 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
               className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-hidden focus:bg-white focus:ring-2 focus:ring-sky-500"
             />
 
+            {/* Hoàn tiền cho khách (invoice_approvals.refundAmount / refundMethod / refundRef) */}
+            <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-600">Số tiền hoàn lại:</span>
+                <span className="font-bold text-slate-900">{selectedInvoiceForAction.finalTotal.toLocaleString('vi-VN')} đ</span>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-slate-600">Hoàn bằng:</span>
+                <select
+                  value={refundMethod}
+                  onChange={(e) => setRefundMethod(e.target.value as PaymentMethod)}
+                  className="px-2 py-1 bg-white border border-slate-300 rounded text-xs"
+                >
+                  <option value="cash">{PAYMENT_METHOD_LABELS.cash}</option>
+                  <option value="transfer">{PAYMENT_METHOD_LABELS.transfer}</option>
+                  <option value="card">{PAYMENT_METHOD_LABELS.card}</option>
+                </select>
+              </div>
+              {refundMethod === 'transfer' && (
+                <input
+                  type="text"
+                  value={refundRef}
+                  onChange={(e) => setRefundRef(e.target.value)}
+                  placeholder="Mã giao dịch hoàn tiền..."
+                  className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs font-mono"
+                />
+              )}
+              {!isManager && (
+                <p className="text-[11px] text-amber-700">
+                  Bạn không có quyền duyệt. Thao tác cần Quản lý xác nhận (invoice:approve) trước khi hoàn tiền.
+                </p>
+              )}
+            </div>
+
             <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
               <button
                 onClick={() => {
@@ -810,16 +813,26 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                 Hủy bỏ
               </button>
               <button
+                disabled={!isManager}
                 onClick={() => {
+                  const approval = {
+                    reason: actionReason || (actionType === 'return' ? 'Khách đổi trả' : 'Hủy hóa đơn sai sót'),
+                    refundAmount: selectedInvoiceForAction.finalTotal,
+                    refundMethod,
+                    refundRef: refundMethod === 'transfer' ? refundRef.trim() || undefined : undefined,
+                    approvedById: currentStaff.id
+                  };
                   if (actionType === 'return') {
-                    onReturnInvoice(selectedInvoiceForAction.id, actionReason || 'Khách đổi trả');
+                    onReturnInvoice(selectedInvoiceForAction.id, approval);
                   } else {
-                    onCancelInvoice(selectedInvoiceForAction.id, actionReason || 'Hủy hóa đơn sai sót');
+                    onCancelInvoice(selectedInvoiceForAction.id, approval);
                   }
                   setSelectedInvoiceForAction(null);
                   setActionType(null);
+                  setRefundMethod('cash');
+                  setRefundRef('');
                 }}
-                className={`px-4 py-1.5 text-xs font-bold text-white rounded-lg ${
+                className={`px-4 py-1.5 text-xs font-bold text-white rounded-lg disabled:opacity-40 disabled:cursor-not-allowed ${
                   actionType === 'return' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-rose-600 hover:bg-rose-700'
                 }`}
               >

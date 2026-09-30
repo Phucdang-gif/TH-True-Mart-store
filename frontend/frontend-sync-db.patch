@@ -1,0 +1,2575 @@
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index d765df8..bc11e02 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -3,23 +3,22 @@ import { Navbar } from './components/Navbar';
+ import { BanHangPOS } from './components/pos/BanHangPOS';
+ import { QuanLyHangHoa } from './components/products/QuanLyHangHoa';
+ import { QuanLyKho } from './components/inventory/QuanLyKho';
+-import { QuanLyKhachHang } from './components/customers/QuanLyKhachHang';
+ import { QuanLyNhanVien } from './components/staff/QuanLyNhanVien';
+ import { QuanLyNhaCungCap } from './components/suppliers/QuanLyNhaCungCap';
+ import { BaoCaoThongKe } from './components/reports/BaoCaoThongKe';
+ import {  
+   INITIAL_BATCHES, 
+-  INITIAL_CUSTOMERS, 
+   INITIAL_STAFF, 
+   INITIAL_SUPPLIERS, 
+   INITIAL_PROMOTIONS, 
+   INITIAL_INVOICES,
+   INITIAL_PURCHASE_ORDERS 
+ } from './data/initialData';
+-import { Product, Batch, Customer, Staff, Supplier, Promotion, Invoice, PurchaseOrder } from './types';
++import { Product, Batch, Staff, Supplier, Promotion, Invoice, InvoiceApproval, PurchaseOrder, StockAudit } from './types';
++import { toNum } from './lib/labels';
+ 
+ export default function App() {
+-  const [activeModule, setActiveModule] = useState<number>(1); // 1 to 7
++  const [activeModule, setActiveModule] = useState<number>(1); // 1 to 6
+ 
+   // Application Data States
+   const [products, setProducts] = useState<Product[]>([]);
+@@ -30,7 +29,13 @@ export default function App() {
+         const response = await fetch('http://localhost:3001/api/products');
+         if (response.ok) {
+           const data = await response.json();
+-          setProducts(data);
++          // Prisma trả DECIMAL dạng chuỗi -> ép về số để tính toán
++          setProducts(data.map((p: any) => ({
++            ...p,
++            sellingPrice: toNum(p.sellingPrice),
++            costPrice: toNum(p.costPrice),
++            discountPercent: p.discountPercent == null ? undefined : toNum(p.discountPercent),
++          })));
+         }
+       } catch (error) {
+         console.error("Lỗi khi kết nối Database:", error);
+@@ -40,12 +45,15 @@ export default function App() {
+     fetchProducts();
+   }, []);
+   const [batches, setBatches] = useState<Batch[]>(INITIAL_BATCHES);
+-  const [customers, setCustomers] = useState<Customer[]>(INITIAL_CUSTOMERS);
+   const [staffList, setStaffList] = useState<Staff[]>(INITIAL_STAFF);
+   const [suppliers, setSuppliers] = useState<Supplier[]>(INITIAL_SUPPLIERS);
+   const [promotions, setPromotions] = useState<Promotion[]>(INITIAL_PROMOTIONS);
+   const [invoices, setInvoices] = useState<Invoice[]>(INITIAL_INVOICES);
+   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>(INITIAL_PURCHASE_ORDERS);
++  const [stockAudits, setStockAudits] = useState<StockAudit[]>([]);
++
++  // Nhân viên đang thao tác. TODO: thay bằng tài khoản đăng nhập (auth_sessions) khi có màn hình đăng nhập.
++  const currentStaff: Staff = staffList.find(s => s.role === 'manager' && s.status === 'active') || staffList[0];
+ 
+   // Expiring Batches calculation for urgent badge in Navbar
+   const getDaysLeft = (expiryDateStr: string) => {
+@@ -61,7 +69,7 @@ export default function App() {
+   }).length;
+ 
+   // Handlers
+-  // 1. Transaction handler: POS completed invoice -> deduct batch (FIFO) & add customer points
++  // 1. Transaction handler: POS completed invoice -> deduct batch (FIFO) 
+   const handleCreateInvoice = (newInvoice: Invoice) => {
+     setInvoices(prev => [newInvoice, ...prev]);
+ 
+@@ -88,41 +96,42 @@ export default function App() {
+       });
+       return updated;
+     });
++  };
+ 
+-    // Customer loyalty points update
+-    if (newInvoice.customerId) {
+-      setCustomers(prev => prev.map(c => {
+-        if (c.id === newInvoice.customerId) {
+-          const newPoints = c.points - newInvoice.pointsUsed + newInvoice.pointsEarned;
+-          const newTotalSpent = c.totalSpent + newInvoice.finalTotal;
+-          let tier = c.tier;
+-          if (newTotalSpent > 5000000) tier = 'Diamond';
+-          else if (newTotalSpent > 2500000) tier = 'Gold';
+-          else if (newTotalSpent > 1000000) tier = 'Silver';
++  // Đổi trả / hủy hóa đơn: quản lý duyệt (invoice_approvals) + hoàn tồn kho
++  type ApprovalInput = Omit<InvoiceApproval, 'id' | 'createdAt' | 'action'>;
+ 
+-          return {
+-            ...c,
+-            points: Math.max(0, newPoints),
+-            totalSpent: newTotalSpent,
+-            tier
+-          };
+-        }
+-        return c;
+-      }));
+-    }
++  const restoreStock = (invoice: Invoice) => {
++    setBatches(prev => prev.map(b => {
++      const item = invoice.items.find(i => (i.batchId ? i.batchId === b.id : i.batchCode === b.batchCode));
++      return item ? { ...b, quantity: b.quantity + item.quantity } : b;
++    }));
+   };
+ 
+-  const handleReturnInvoice = (invoiceId: string, reason: string) => {
+-    setInvoices(prev => prev.map(inv => 
+-      inv.id === invoiceId ? { ...inv, status: 'returned', notes: `${inv.notes || ''} [Đã trả hàng: ${reason}]` } : inv
++  const applyApproval = (invoiceId: string, action: 'return' | 'cancel', input: ApprovalInput) => {
++    const target = invoices.find(inv => inv.id === invoiceId);
++    if (!target) return;
++    const approval: InvoiceApproval = {
++      ...input,
++      id: `appr-${Date.now()}`,
++      action,
++      createdAt: new Date().toLocaleString('vi-VN'),
++    };
++    setInvoices(prev => prev.map(inv =>
++      inv.id === invoiceId
++        ? {
++            ...inv,
++            status: action === 'return' ? 'returned' : 'cancelled',
++            approvals: [...(inv.approvals || []), approval],
++            notes: `${inv.notes || ''} [${action === 'return' ? 'Đã trả hàng' : 'Đã hủy'}: ${input.reason}]`,
++          }
++        : inv
+     ));
++    restoreStock(target);
+   };
+ 
+-  const handleCancelInvoice = (invoiceId: string, reason: string) => {
+-    setInvoices(prev => prev.map(inv => 
+-      inv.id === invoiceId ? { ...inv, status: 'cancelled', notes: `${inv.notes || ''} [Đã hủy: ${reason}]` } : inv
+-    ));
+-  };
++  const handleReturnInvoice = (invoiceId: string, input: ApprovalInput) => applyApproval(invoiceId, 'return', input);
++  const handleCancelInvoice = (invoiceId: string, input: ApprovalInput) => applyApproval(invoiceId, 'cancel', input);
+ 
+   // 2. Product management handlers
+   const handleUpdateProductPrice = (productId: string, newSellingPrice: number, newCostPrice: number) => {
+@@ -150,18 +159,26 @@ export default function App() {
+     ));
+   };
+ 
+-  // 4. Customer handlers
+-  const handleAddCustomer = (newCustomer: Customer) => {
+-    setCustomers(prev => [...prev, newCustomer]);
++  // Kiểm kê: lập phiếu -> chờ quản lý duyệt -> khi duyệt mới cập nhật tồn kho theo số thực tế
++  const handleSubmitAudit = (audit: StockAudit) => {
++    setStockAudits(prev => [audit, ...prev]);
+   };
+ 
+-  const handleUpdateCustomerPoints = (customerId: string, deltaPoints: number) => {
+-    setCustomers(prev => prev.map(c => 
+-      c.id === customerId ? { ...c, points: Math.max(0, c.points + deltaPoints) } : c
++  const handleReviewAudit = (auditId: string, approved: boolean, approverId: string) => {
++    const audit = stockAudits.find(x => x.id === auditId);
++    if (!audit || audit.status !== 'pending_approval') return;
++    setStockAudits(prev => prev.map(x =>
++      x.id === auditId ? { ...x, status: approved ? 'approved' : 'rejected', approvedById: approverId } : x
+     ));
++    if (approved) {
++      setBatches(prev => prev.map(b => {
++        const line = audit.items.find(i => i.batchId === b.id);
++        return line ? { ...b, quantity: line.actualQuantity } : b;
++      }));
++    }
+   };
+ 
+-  // 5. Staff handlers
++  // 4. Staff handlers
+   const handleAddStaff = (newStaff: Staff) => {
+     setStaffList(prev => [...prev, newStaff]);
+   };
+@@ -172,7 +189,7 @@ export default function App() {
+     ));
+   };
+ 
+-  // 6. Supplier handlers
++  // 5. Supplier handlers
+   const handleAddSupplier = (newSup: Supplier) => {
+     setSuppliers(prev => [...prev, newSup]);
+   };
+@@ -183,7 +200,7 @@ export default function App() {
+ 
+   return (
+     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800">
+-      {/* Top Main Navigation Bar with 7 BFD modules */}
++      {/* Top Main Navigation Bar with 6 modules */}
+       <Navbar
+         activeModule={activeModule}
+         setActiveModule={setActiveModule}
+@@ -197,7 +214,7 @@ export default function App() {
+             <BanHangPOS
+               products={products}
+               batches={batches}
+-              customers={customers}
++              currentStaff={currentStaff}
+               promotions={promotions}
+               invoices={invoices}
+               onCompleteSale={handleCreateInvoice}
+@@ -222,19 +239,14 @@ export default function App() {
+               batches={batches}
+               onAddBatch={handleAddBatch}
+               onAdjustStock={handleAdjustStock}
++              currentStaff={currentStaff}
++              audits={stockAudits}
++              onSubmitAudit={handleSubmitAudit}
++              onReviewAudit={handleReviewAudit}
+             />
+           )}
+ 
+           {activeModule === 4 && (
+-            <QuanLyKhachHang
+-              customers={customers}
+-              invoices={invoices}
+-              onAddCustomer={handleAddCustomer}
+-              onUpdateCustomerPoints={handleUpdateCustomerPoints}
+-            />
+-          )}
+-
+-          {activeModule === 5 && (
+             <QuanLyNhanVien
+               staffList={staffList}
+               onAddStaff={handleAddStaff}
+@@ -242,7 +254,7 @@ export default function App() {
+             />
+           )}
+ 
+-          {activeModule === 6 && (
++          {activeModule === 5 && (
+             <QuanLyNhaCungCap
+               suppliers={suppliers}
+               products={products}
+@@ -252,7 +264,7 @@ export default function App() {
+             />
+           )}
+ 
+-          {activeModule === 7 && (
++          {activeModule === 6 && (
+             <BaoCaoThongKe
+               invoices={invoices}
+               products={products}
+diff --git a/frontend/src/components/InvoiceModal.tsx b/frontend/src/components/InvoiceModal.tsx
+index b9fc085..00126d4 100644
+--- a/frontend/src/components/InvoiceModal.tsx
++++ b/frontend/src/components/InvoiceModal.tsx
+@@ -1,6 +1,7 @@
+ import React from 'react';
+ import { Printer, X, CheckCircle, Milk, QrCode } from 'lucide-react';
+ import { Invoice } from '../types';
++import { PAYMENT_METHOD_LABELS } from '../lib/labels';
+ 
+ interface InvoiceModalProps {
+   invoice: Invoice | null;
+@@ -68,12 +69,6 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ invoice, onClose })
+               <span>Thu ngân:</span>
+               <span>{invoice.cashierName}</span>
+             </div>
+-            {invoice.customerName && (
+-              <div className="flex justify-between text-sky-800 font-medium">
+-                <span>Khách hàng TH Club:</span>
+-                <span>{invoice.customerName} ({invoice.customerPhone})</span>
+-              </div>
+-            )}
+           </div>
+ 
+           {/* Items Table */}
+@@ -114,13 +109,6 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ invoice, onClose })
+               </div>
+             )}
+ 
+-            {invoice.pointsUsed > 0 && (
+-              <div className="flex justify-between text-amber-600">
+-                <span>Đổi điểm TH Point ({invoice.pointsUsed} điểm):</span>
+-                <span>-{(invoice.pointsUsed * 1000).toLocaleString('vi-VN')} đ</span>
+-              </div>
+-            )}
+-
+             <div className="flex justify-between text-base font-extrabold text-[#004885] pt-1 border-t border-slate-300">
+               <span>TỔNG THANH TOÁN:</span>
+               <span>{invoice.finalTotal.toLocaleString('vi-VN')} đ</span>
+@@ -128,15 +116,24 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ invoice, onClose })
+ 
+             <div className="flex justify-between text-[11px] text-slate-500 pt-1">
+               <span>Hình thức thanh toán:</span>
+-              <span className="capitalize font-medium text-slate-700">
+-                {invoice.paymentMethod === 'cash' ? 'Tiền mặt' : invoice.paymentMethod === 'transfer' ? 'Chuyển khoản VietQR' : 'Thẻ ngân hàng'}
+-              </span>
++              <span className="font-medium text-slate-700">{PAYMENT_METHOD_LABELS[invoice.paymentMethod]}</span>
+             </div>
+ 
+-            {invoice.paymentMethod === 'cash' && (
++            {/* Từng khoản thanh toán (invoice_payments) */}
++            {invoice.payments.map(p => (
++              <div key={p.id} className="flex justify-between text-[11px] text-slate-600">
++                <span>
++                  - {PAYMENT_METHOD_LABELS[p.method]}
++                  {p.reference ? ` (${p.reference})` : ''}
++                </span>
++                <span>{p.amount.toLocaleString('vi-VN')} đ</span>
++              </div>
++            ))}
++
++            {invoice.changeAmount > 0 && (
+               <>
+                 <div className="flex justify-between text-[11px]">
+-                  <span>Tiền khách đưa:</span>
++                  <span>Tổng tiền khách đưa:</span>
+                   <span>{invoice.receivedAmount.toLocaleString('vi-VN')} đ</span>
+                 </div>
+                 <div className="flex justify-between text-[11px] font-semibold text-emerald-700">
+@@ -145,12 +142,6 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ invoice, onClose })
+                 </div>
+               </>
+             )}
+-
+-            {invoice.pointsEarned > 0 && (
+-              <div className="bg-sky-50 p-2 rounded text-sky-800 text-[11px] font-medium text-center mt-2 border border-sky-100">
+-                ⭐ Tích lũy thêm +{invoice.pointsEarned} True Point cho lần mua sau!
+-              </div>
+-            )}
+           </div>
+ 
+           {/* Footer Note */}
+diff --git a/frontend/src/components/Navbar.tsx b/frontend/src/components/Navbar.tsx
+index 9c80089..8a0a2fe 100644
+--- a/frontend/src/components/Navbar.tsx
++++ b/frontend/src/components/Navbar.tsx
+@@ -4,7 +4,6 @@ import {
+   ShoppingCart, 
+   Package, 
+   Warehouse, 
+-  Users, 
+   UserCheck, 
+   Truck, 
+   BarChart3, 
+@@ -40,10 +39,9 @@ export const Navbar: React.FC<NavbarProps> = ({
+     { id: 1, name: '1. Bán hàng (POS)', icon: ShoppingCart },
+     { id: 2, name: '2. Hàng hóa & Giá', icon: Package },
+     { id: 3, name: '3. Quản lý kho', icon: Warehouse, badge: expiringCount > 0 ? expiringCount : null },
+-    { id: 4, name: '4. Khách hàng (TH Club)', icon: Users },
+-    { id: 5, name: '5. Nhân viên & Ca làm', icon: UserCheck },
+-    { id: 6, name: '6. Nhà cung cấp', icon: Truck },
+-    { id: 7, name: '7. Báo cáo thống kê', icon: BarChart3 },
++    { id: 4, name: '4. Nhân viên & Ca làm', icon: UserCheck },
++    { id: 5, name: '5. Nhà cung cấp', icon: Truck },
++    { id: 6, name: '6. Báo cáo thống kê', icon: BarChart3 },
+   ];
+ 
+   return (
+@@ -84,7 +82,7 @@ export const Navbar: React.FC<NavbarProps> = ({
+         </div>
+       </div>
+ 
+-      {/* Secondary Navigation: 7 Modules from the BFD */}
++      {/* Secondary Navigation: 6 Modules */}
+       <div className="bg-slate-50 border-b border-slate-200 overflow-x-auto scrollbar-none">
+         <div className="max-w-7xl mx-auto px-4 sm:px-6 flex space-x-1 py-1.5">
+           {bfdModules.map((module) => {
+diff --git a/frontend/src/components/customers/QuanLyKhachHang.tsx b/frontend/src/components/customers/QuanLyKhachHang.tsx
+deleted file mode 100644
+index 52c6a58..0000000
+--- a/frontend/src/components/customers/QuanLyKhachHang.tsx
++++ /dev/null
+@@ -1,391 +0,0 @@
+-import React, { useState } from 'react';
+-import { 
+-  Users, 
+-  UserPlus, 
+-  Award, 
+-  Gift, 
+-  History, 
+-  Search, 
+-  Phone, 
+-  Mail, 
+-  X,
+-  CreditCard
+-} from 'lucide-react';
+-import { Customer, Invoice } from '../../types';
+-
+-interface QuanLyKhachHangProps {
+-  customers: Customer[];
+-  invoices: Invoice[];
+-  onAddCustomer: (customer: Customer) => void;
+-  onUpdateCustomerPoints: (customerId: string, deltaPoints: number) => void;
+-}
+-
+-export const QuanLyKhachHang: React.FC<QuanLyKhachHangProps> = ({
+-  customers,
+-  invoices,
+-  onAddCustomer,
+-  onUpdateCustomerPoints
+-}) => {
+-  const [search, setSearch] = useState('');
+-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+-  const [showAddModal, setShowAddModal] = useState(false);
+-  const [showPointsModal, setShowPointsModal] = useState(false);
+-  const [pointDelta, setPointDelta] = useState<number>(50);
+-  const [pointAction, setPointAction] = useState<'add' | 'subtract'>('add');
+-
+-  // New Customer State (4.1)
+-  const [newCust, setNewCust] = useState({
+-    code: `KH-${Math.floor(1000 + Math.random() * 9000)}`,
+-    name: '',
+-    phone: '',
+-    email: '',
+-    tier: 'Standard' as const
+-  });
+-
+-  const filteredCustomers = customers.filter(c => 
+-    c.name.toLowerCase().includes(search.toLowerCase()) ||
+-    c.phone.includes(search) ||
+-    c.code.toLowerCase().includes(search.toLowerCase())
+-  );
+-
+-  const customerInvoices = selectedCustomer
+-    ? invoices.filter(inv => inv.customerId === selectedCustomer.id || inv.customerPhone === selectedCustomer.phone)
+-    : [];
+-
+-  const handleCreateCustomer = (e: React.FormEvent) => {
+-    e.preventDefault();
+-    if (!newCust.name || !newCust.phone) {
+-      alert('Vui lòng nhập tên và số điện thoại khách hàng!');
+-      return;
+-    }
+-    const customerToAdd: Customer = {
+-      id: `cust-${Date.now()}`,
+-      code: newCust.code,
+-      name: newCust.name,
+-      phone: newCust.phone,
+-      email: newCust.email,
+-      points: 10, // Tặng 10 điểm chào mừng thành viên mới
+-      tier: 'Standard',
+-      createdAt: new Date().toISOString().slice(0, 10),
+-      totalSpent: 0
+-    };
+-    onAddCustomer(customerToAdd);
+-    setShowAddModal(false);
+-  };
+-
+-  const handlePointsChange = () => {
+-    if (!selectedCustomer) return;
+-    const delta = pointAction === 'add' ? Number(pointDelta) : -Number(pointDelta);
+-    onUpdateCustomerPoints(selectedCustomer.id, delta);
+-    setShowPointsModal(false);
+-  };
+-
+-  return (
+-    <div className="space-y-4">
+-      {/* Header and Actions */}
+-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+-        <div>
+-          <h3 className="font-bold text-sm text-slate-900">4. Quản lý khách hàng & Thành viên TH Club</h3>
+-          <p className="text-xs text-slate-500">Chăm sóc khách hàng thân thiết, chương trình tích lũy True Point đổi quà</p>
+-        </div>
+-
+-        <button
+-          id="btn-open-add-customer"
+-          onClick={() => setShowAddModal(true)}
+-          className="bg-[#004885] hover:bg-[#00386b] text-white text-xs font-bold px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors shadow-xs"
+-        >
+-          <UserPlus className="w-4 h-4" />
+-          <span>4.1 Đăng ký thành viên mới</span>
+-        </button>
+-      </div>
+-
+-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+-        {/* Customer List (4.1 & 4.2) */}
+-        <div className="lg:col-span-7 bg-white rounded-xl border border-slate-200 p-4 shadow-xs space-y-4">
+-          <div className="relative w-full">
+-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+-            <input
+-              type="text"
+-              value={search}
+-              onChange={(e) => setSearch(e.target.value)}
+-              placeholder="Tìm theo tên, SĐT khách hàng..."
+-              className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-hidden focus:bg-white"
+-            />
+-          </div>
+-
+-          <div className="overflow-x-auto">
+-            <table className="w-full text-left text-xs border-collapse">
+-              <thead>
+-                <tr className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
+-                  <th className="py-2.5 px-3">Mã KH</th>
+-                  <th className="py-2.5 px-3">Họ tên & SĐT</th>
+-                  <th className="py-2.5 px-3 text-center">Hạng thẻ</th>
+-                  <th className="py-2.5 px-3 text-right">Điểm True Point</th>
+-                  <th className="py-2.5 px-3 text-right">Tổng chi tiêu</th>
+-                  <th className="py-2.5 px-3 text-right">Thao tác</th>
+-                </tr>
+-              </thead>
+-              <tbody className="divide-y divide-slate-100">
+-                {filteredCustomers.map(cust => (
+-                  <tr
+-                    key={cust.id}
+-                    onClick={() => setSelectedCustomer(cust)}
+-                    className={`cursor-pointer transition-colors ${
+-                      selectedCustomer?.id === cust.id ? 'bg-sky-50/80 font-medium' : 'hover:bg-slate-50/70'
+-                    }`}
+-                  >
+-                    <td className="py-2.5 px-3 font-mono font-bold text-[#004885]">{cust.code}</td>
+-                    <td className="py-2.5 px-3">
+-                      <div className="font-semibold text-slate-900">{cust.name}</div>
+-                      <div className="text-[11px] text-slate-500">{cust.phone}</div>
+-                    </td>
+-                    <td className="py-2.5 px-3 text-center">
+-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+-                        cust.tier === 'Diamond' ? 'bg-purple-100 text-purple-800' :
+-                        cust.tier === 'Gold' ? 'bg-amber-100 text-amber-800' :
+-                        cust.tier === 'Silver' ? 'bg-slate-200 text-slate-800' : 'bg-sky-100 text-sky-800'
+-                      }`}>
+-                        {cust.tier}
+-                      </span>
+-                    </td>
+-                    <td className="py-2.5 px-3 text-right font-bold text-emerald-700">
+-                      {cust.points} đ
+-                    </td>
+-                    <td className="py-2.5 px-3 text-right font-medium text-slate-700">
+-                      {cust.totalSpent.toLocaleString('vi-VN')} đ
+-                    </td>
+-                    <td className="py-2.5 px-3 text-right">
+-                      <button
+-                        onClick={(e) => {
+-                          e.stopPropagation();
+-                          setSelectedCustomer(cust);
+-                          setShowPointsModal(true);
+-                        }}
+-                        className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded font-semibold text-[11px] inline-flex items-center gap-1"
+-                      >
+-                        <Gift className="w-3 h-3" />
+-                        <span>Đổi điểm</span>
+-                      </button>
+-                    </td>
+-                  </tr>
+-                ))}
+-              </tbody>
+-            </table>
+-          </div>
+-        </div>
+-
+-        {/* Customer Detail & Purchase History (4.3 Tra cứu lịch sử mua hàng) */}
+-        <div className="lg:col-span-5 bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-4">
+-          {selectedCustomer ? (
+-            <>
+-              <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+-                <div className="space-y-1">
+-                  <span className="text-[10px] font-bold uppercase tracking-wider bg-sky-100 text-[#004885] px-2 py-0.5 rounded">
+-                    Thành viên {selectedCustomer.tier}
+-                  </span>
+-                  <h4 className="font-bold text-base text-slate-900">{selectedCustomer.name}</h4>
+-                  <p className="text-xs text-slate-500">{selectedCustomer.phone} {selectedCustomer.email && `• ${selectedCustomer.email}`}</p>
+-                </div>
+-                <div className="text-right">
+-                  <span className="text-[10px] text-slate-400 block">Điểm tích lũy</span>
+-                  <span className="text-lg font-black text-emerald-700">{selectedCustomer.points} pt</span>
+-                </div>
+-              </div>
+-
+-              {/* 4.3 Purchase History */}
+-              <div className="space-y-3">
+-                <h5 className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
+-                  <History className="w-3.5 h-3.5 text-[#004885]" />
+-                  <span>4.3 Lịch sử mua hàng tại TH true mart ({customerInvoices.length} đơn)</span>
+-                </h5>
+-
+-                <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
+-                  {customerInvoices.length === 0 ? (
+-                    <p className="text-xs text-slate-400 py-6 text-center">Chưa có dữ liệu hóa đơn của khách hàng này.</p>
+-                  ) : (
+-                    customerInvoices.map(inv => (
+-                      <div key={inv.id} className="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-1.5 text-xs">
+-                        <div className="flex items-center justify-between font-bold">
+-                          <span className="text-[#004885]">{inv.code}</span>
+-                          <span>{inv.finalTotal.toLocaleString('vi-VN')} đ</span>
+-                        </div>
+-                        <div className="flex justify-between text-[11px] text-slate-500">
+-                          <span>{inv.createdAt}</span>
+-                          <span>+{inv.pointsEarned} điểm</span>
+-                        </div>
+-                        <div className="border-t border-slate-200/60 pt-1.5 text-[11px] text-slate-700">
+-                          {inv.items.map((i, idx) => (
+-                            <div key={idx} className="flex justify-between">
+-                              <span className="truncate max-w-[200px]">{i.productName} (x{i.quantity})</span>
+-                              <span>{i.subtotal.toLocaleString('vi-VN')} đ</span>
+-                            </div>
+-                          ))}
+-                        </div>
+-                      </div>
+-                    ))
+-                  )}
+-                </div>
+-              </div>
+-            </>
+-          ) : (
+-            <div className="text-center py-12 text-slate-400 space-y-2">
+-              <Users className="w-10 h-10 mx-auto text-slate-300" />
+-              <p className="text-xs font-medium">Chọn một khách hàng ở bảng bên trái để tra cứu điểm và lịch sử hóa đơn mua hàng.</p>
+-            </div>
+-          )}
+-        </div>
+-      </div>
+-
+-      {/* Modal: 4.1 Đăng ký khách hàng mới */}
+-      {showAddModal && (
+-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+-              <h3 className="font-bold text-sm text-slate-900">4.1 Đăng ký thành viên TH Club</h3>
+-              <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-slate-600">
+-                <X className="w-5 h-5" />
+-              </button>
+-            </div>
+-
+-            <form onSubmit={handleCreateCustomer} className="space-y-3 text-xs">
+-              <div>
+-                <label className="font-bold text-slate-700 block mb-1">Mã khách hàng</label>
+-                <input
+-                  type="text"
+-                  value={newCust.code}
+-                  readOnly
+-                  className="w-full p-2 bg-slate-100 border border-slate-200 rounded-lg font-mono font-bold text-slate-600"
+-                />
+-              </div>
+-
+-              <div>
+-                <label className="font-bold text-slate-700 block mb-1">Họ và tên khách hàng</label>
+-                <input
+-                  type="text"
+-                  placeholder="VD: Lê Hoàng Nam"
+-                  value={newCust.name}
+-                  onChange={(e) => setNewCust({...newCust, name: e.target.value})}
+-                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+-                  required
+-                />
+-              </div>
+-
+-              <div>
+-                <label className="font-bold text-slate-700 block mb-1">Số điện thoại (dùng tích điểm)</label>
+-                <input
+-                  type="tel"
+-                  placeholder="09xxxxxxxx"
+-                  value={newCust.phone}
+-                  onChange={(e) => setNewCust({...newCust, phone: e.target.value})}
+-                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-mono"
+-                  required
+-                />
+-              </div>
+-
+-              <div>
+-                <label className="font-bold text-slate-700 block mb-1">Email nhận ưu đãi (không bắt buộc)</label>
+-                <input
+-                  type="email"
+-                  placeholder="khachhang@example.com"
+-                  value={newCust.email}
+-                  onChange={(e) => setNewCust({...newCust, email: e.target.value})}
+-                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+-                />
+-              </div>
+-
+-              <div className="bg-sky-50 p-2.5 rounded-lg border border-sky-100 text-sky-800 text-[11px]">
+-                🎁 Thành viên mới được tặng ngay 10 điểm True Point chào mừng!
+-              </div>
+-
+-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+-                <button
+-                  type="button"
+-                  onClick={() => setShowAddModal(false)}
+-                  className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium"
+-                >
+-                  Hủy
+-                </button>
+-                <button
+-                  type="submit"
+-                  className="px-4 py-2 bg-[#004885] hover:bg-[#00386b] text-white rounded-lg font-bold shadow-xs"
+-                >
+-                  Xác nhận đăng ký
+-                </button>
+-              </div>
+-            </form>
+-          </div>
+-        </div>
+-      )}
+-
+-      {/* Modal: 4.2 Tích điểm / Đổi điểm */}
+-      {showPointsModal && selectedCustomer && (
+-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+-          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+-              <h3 className="font-bold text-sm text-slate-900">4.2 Tích điểm / Đổi quà TH Point</h3>
+-              <button onClick={() => setShowPointsModal(false)} className="text-slate-400 hover:text-slate-600">
+-                <X className="w-5 h-5" />
+-              </button>
+-            </div>
+-
+-            <div className="space-y-3 text-xs">
+-              <p className="text-slate-600">
+-                Khách hàng: <span className="font-bold text-slate-900">{selectedCustomer.name}</span>
+-                <br />Điểm hiện tại: <span className="font-bold text-emerald-700">{selectedCustomer.points} điểm</span>
+-              </p>
+-
+-              <div className="grid grid-cols-2 gap-2">
+-                <button
+-                  type="button"
+-                  onClick={() => setPointAction('add')}
+-                  className={`p-2 rounded-lg border font-bold ${
+-                    pointAction === 'add' ? 'bg-emerald-50 border-emerald-500 text-emerald-800' : 'border-slate-200 text-slate-600'
+-                  }`}
+-                >
+-                  + Cộng thêm điểm
+-                </button>
+-                <button
+-                  type="button"
+-                  onClick={() => setPointAction('subtract')}
+-                  className={`p-2 rounded-lg border font-bold ${
+-                    pointAction === 'subtract' ? 'bg-rose-50 border-rose-500 text-rose-800' : 'border-slate-200 text-slate-600'
+-                  }`}
+-                >
+-                  - Đổi quà (Trừ điểm)
+-                </button>
+-              </div>
+-
+-              <div>
+-                <label className="font-bold text-slate-700 block mb-1">Số điểm thao tác</label>
+-                <input
+-                  type="number"
+-                  value={pointDelta}
+-                  onChange={(e) => setPointDelta(Number(e.target.value))}
+-                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-bold text-sm"
+-                  min="1"
+-                />
+-              </div>
+-
+-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+-                <button
+-                  type="button"
+-                  onClick={() => setShowPointsModal(false)}
+-                  className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium"
+-                >
+-                  Hủy
+-                </button>
+-                <button
+-                  type="button"
+-                  onClick={handlePointsChange}
+-                  className="px-4 py-2 bg-[#004885] hover:bg-[#00386b] text-white rounded-lg font-bold shadow-xs"
+-                >
+-                  Lưu thay đổi
+-                </button>
+-              </div>
+-            </div>
+-          </div>
+-        </div>
+-      )}
+-    </div>
+-  );
+-};
+diff --git a/frontend/src/components/inventory/QuanLyKho.tsx b/frontend/src/components/inventory/QuanLyKho.tsx
+index 59e6d63..a735e7a 100644
+--- a/frontend/src/components/inventory/QuanLyKho.tsx
++++ b/frontend/src/components/inventory/QuanLyKho.tsx
+@@ -12,20 +12,28 @@ import {
+   CheckCircle2,
+   X
+ } from 'lucide-react';
+-import { Product, Batch, StockAuditItem } from '../../types';
++import { Product, Batch, StockAudit, StockAuditItem, Staff } from '../../types';
+ 
+ interface QuanLyKhoProps {
+   products: Product[];
+   batches: Batch[];
+   onAddBatch: (batch: Batch) => void;
+   onAdjustStock: (batchId: string, newQuantity: number, reason: string) => void;
++  currentStaff: Staff; // người nhập kho / kiểm kê / duyệt
++  audits: StockAudit[]; // phiếu kiểm kê (stock_audits)
++  onSubmitAudit: (audit: StockAudit) => void;
++  onReviewAudit: (auditId: string, approved: boolean, approverId: string) => void;
+ }
+ 
+ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
+   products,
+   batches,
+   onAddBatch,
+-  onAdjustStock
++  onAdjustStock,
++  currentStaff,
++  audits,
++  onSubmitAudit,
++  onReviewAudit
+ }) => {
+   const [activeTab, setActiveTab] = useState<'batches' | 'alerts' | 'import' | 'audit'>('batches');
+   const [search, setSearch] = useState('');
+@@ -83,7 +91,8 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
+       expiryDate: expDate,
+       quantity: Number(importQty),
+       importPrice: Number(importPrice),
+-      status: days <= 30 ? 'expiring_soon' : 'good'
++      status: days < 0 ? 'expired' : days <= 30 ? 'expiring_soon' : 'good',
++      receivedById: currentStaff.id
+     };
+ 
+     onAddBatch(newBatch);
+@@ -317,7 +326,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
+             </div>
+             {auditSaved && (
+               <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-lg border border-emerald-200 flex items-center gap-1">
+-                <CheckCircle2 className="w-3.5 h-3.5" /> Đã cân bằng và lưu phiếu kiểm kê!
++                <CheckCircle2 className="w-3.5 h-3.5" /> Đã gửi phiếu kiểm kê, chờ quản lý duyệt!
+               </span>
+             )}
+           </div>
+@@ -376,14 +385,80 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
+           <div className="flex justify-end pt-3 border-t border-slate-100">
+             <button
+               onClick={() => {
++                const items: StockAuditItem[] = batches.slice(0, 6).map(b => {
++                  const actual = auditItems[b.id] !== undefined ? auditItems[b.id] : b.quantity;
++                  const diff = actual - b.quantity;
++                  return {
++                    batchId: b.id,
++                    productId: b.productId,
++                    productName: products.find(p => p.id === b.productId)?.name || '',
++                    systemQuantity: b.quantity,
++                    actualQuantity: actual,
++                    difference: diff,
++                    reason: diff < 0 ? 'Bao bì móp méo / vỡ hỏng' : diff > 0 ? 'Thừa khi nhập hàng' : 'Khớp'
++                  };
++                });
++                const now = new Date();
++                onSubmitAudit({
++                  id: `audit-${now.getTime()}`,
++                  auditCode: `KK-${now.toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(10 + Math.random() * 90)}`,
++                  auditDate: now.toLocaleString('vi-VN'),
++                  performedById: currentStaff.id,
++                  status: 'pending_approval', // chờ quản lý duyệt, tồn kho CHƯA đổi
++                  items
++                });
++                setAuditItems({});
+                 setAuditSaved(true);
+                 setTimeout(() => setAuditSaved(false), 3000);
+               }}
+               className="px-4 py-2 bg-[#004885] hover:bg-[#00386b] text-white rounded-lg text-xs font-bold shadow-xs"
+             >
+-              Hoàn tất kiểm kê & Cập nhật kho
++              Gửi phiếu kiểm kê chờ quản lý duyệt
+             </button>
+           </div>
++
++          {/* Danh sách phiếu kiểm kê & bước quản lý duyệt (stock_audits) */}
++          {audits.length > 0 && (
++            <div className="space-y-2 pt-3 border-t border-slate-100">
++              <h4 className="font-bold text-xs text-slate-900">Phiếu kiểm kê đã lập ({audits.length})</h4>
++              {audits.map(a => {
++                const totalDiff = a.items.reduce((acc, i) => acc + i.difference, 0);
++                const statusLabel = {
++                  draft: 'Nháp',
++                  pending_approval: 'Chờ duyệt',
++                  approved: 'Đã duyệt',
++                  rejected: 'Từ chối'
++                }[a.status];
++                return (
++                  <div key={a.id} className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs">
++                    <div>
++                      <span className="font-mono font-bold text-[#004885]">{a.auditCode}</span>
++                      <span className="text-slate-500"> • {a.auditDate} • {a.items.length} dòng • Chênh lệch: {totalDiff > 0 ? `+${totalDiff}` : totalDiff}</span>
++                    </div>
++                    <div className="flex items-center gap-2">
++                      <span className="font-bold text-slate-700">{statusLabel}</span>
++                      {a.status === 'pending_approval' && currentStaff.role === 'manager' && (
++                        <>
++                          <button
++                            onClick={() => onReviewAudit(a.id, true, currentStaff.id)}
++                            className="px-2 py-1 rounded bg-emerald-600 text-white font-bold"
++                          >
++                            Duyệt
++                          </button>
++                          <button
++                            onClick={() => onReviewAudit(a.id, false, currentStaff.id)}
++                            className="px-2 py-1 rounded bg-rose-50 text-rose-700 font-bold"
++                          >
++                            Từ chối
++                          </button>
++                        </>
++                      )}
++                    </div>
++                  </div>
++                );
++              })}
++            </div>
++          )}
+         </div>
+       )}
+ 
+diff --git a/frontend/src/components/pos/BanHangPOS.tsx b/frontend/src/components/pos/BanHangPOS.tsx
+index f537f7c..60ecf8e 100644
+--- a/frontend/src/components/pos/BanHangPOS.tsx
++++ b/frontend/src/components/pos/BanHangPOS.tsx
+@@ -10,29 +10,29 @@ import {
+   QrCode, 
+   Sparkles, 
+   Tag, 
+-  UserCheck, 
+   RotateCcw, 
+   XCircle,
+   Eye,
+   AlertTriangle
+ } from 'lucide-react';
+-import { Product, Batch, Customer, Promotion, Invoice, CartItem } from '../../types';
++import { Product, Batch, Promotion, Invoice, InvoicePayment, InvoiceApproval, CartItem, Staff, PaymentMethod } from '../../types';
++import { CATEGORY_LABELS, CATEGORY_LIST, INVOICE_STATUS_LABELS, PAYMENT_METHOD_LABELS } from '../../lib/labels';
+ 
+ interface BanHangPOSProps {
+   products: Product[];
+   batches: Batch[];
+-  customers: Customer[];
++  currentStaff: Staff; // nhân viên đang đăng nhập (thu ngân / quản lý)
+   promotions: Promotion[];
+   invoices: Invoice[];
+   onCompleteSale: (invoice: Invoice) => void;
+-  onReturnInvoice: (invoiceId: string, reason: string) => void;
+-  onCancelInvoice: (invoiceId: string, reason: string) => void;
++  onReturnInvoice: (invoiceId: string, approval: Omit<InvoiceApproval, 'id' | 'createdAt' | 'action'>) => void;
++  onCancelInvoice: (invoiceId: string, approval: Omit<InvoiceApproval, 'id' | 'createdAt' | 'action'>) => void;
+ }
+ 
+ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+   products,
+   batches,
+-  customers,
++  currentStaff,
+   promotions,
+   invoices,
+   onCompleteSale,
+@@ -45,16 +45,16 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+   const [cart, setCart] = useState<CartItem[]>([]);
+   const [barcodeInput, setBarcodeInput] = useState('');
+   
+-  // Customer & Promotion state
+-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+-  const [customerSearch, setCustomerSearch] = useState('');
++  // Promotion state
+   const [promoCode, setPromoCode] = useState('');
+   const [appliedPromo, setAppliedPromo] = useState<Promotion | null>(null);
+-  const [usePoints, setUsePoints] = useState(false);
+   
+-  // Payment state
+-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'transfer' | 'card'>('cash');
++  // Payment state: thanh toán nhiều hình thức (bảng invoice_payments)
+   const [cashGiven, setCashGiven] = useState<number>(0);
++  const [transferAmount, setTransferAmount] = useState<number>(0);
++  const [transferRef, setTransferRef] = useState('');
++  const [cardAmount, setCardAmount] = useState<number>(0);
++  const [cardRef, setCardRef] = useState('');
+   const [notes, setNotes] = useState('');
+   const [barcodeSuccessMsg, setBarcodeSuccessMsg] = useState<string | null>(null);
+ 
+@@ -62,18 +62,12 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+   const [selectedInvoiceForAction, setSelectedInvoiceForAction] = useState<Invoice | null>(null);
+   const [actionType, setActionType] = useState<'return' | 'cancel' | null>(null);
+   const [actionReason, setActionReason] = useState('');
++  const [refundMethod, setRefundMethod] = useState<PaymentMethod>('cash');
++  const [refundRef, setRefundRef] = useState('');
++  const isManager = currentStaff.role === 'manager'; // quyền invoice:approve
+ 
+-  // Categories list
+-  const categories = [
+-    'all',
+-    'Sữa tươi tiệt trùng',
+-    'Sữa tươi thanh trùng',
+-    'Sữa chua ăn & uống',
+-    'Bơ & Phô mai tự nhiên',
+-    'Kem TH true ICE CREAM',
+-    'Nước tinh khiết & Nước trái cây',
+-    'Trà tự nhiên TH true TEA'
+-  ];
++  // Categories list (mã enum của DB)
++  const categories: string[] = ['all', ...CATEGORY_LIST];
+ 
+   // Filter products
+   const filteredProducts = products.filter(p => {
+@@ -154,29 +148,38 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+   const subtotal = cart.reduce((acc, item) => acc + (item.unitPrice * item.quantity), 0);
+   const itemDiscounts = cart.reduce((acc, item) => acc + (item.discount * item.quantity), 0);
+ 
+-  // Voucher discount
++  // Voucher discount (theo promotions.discountType, có trần maxDiscountAmount khi giảm %)
+   let voucherDiscount = 0;
+   if (appliedPromo) {
+     if (appliedPromo.discountType === 'percentage') {
+       voucherDiscount = (subtotal * appliedPromo.value) / 100;
++      if (appliedPromo.maxDiscountAmount) {
++        voucherDiscount = Math.min(voucherDiscount, appliedPromo.maxDiscountAmount);
++      }
+     } else {
+       voucherDiscount = appliedPromo.value;
+     }
+   }
+ 
+-  // Customer Points discount (1 point = 1.000đ)
+-  const maxUsablePoints = selectedCustomer ? Math.min(selectedCustomer.points, Math.floor((subtotal - itemDiscounts - voucherDiscount) / 1000)) : 0;
+-  const pointsDiscount = usePoints && selectedCustomer ? Math.max(0, maxUsablePoints * 1000) : 0;
+-
+-  const totalDiscount = itemDiscounts + voucherDiscount + pointsDiscount;
++  const totalDiscount = itemDiscounts + voucherDiscount;
+   const finalTotal = Math.max(0, subtotal - totalDiscount);
+-  const changeAmount = Math.max(0, cashGiven - finalTotal);
++
++  // Tổng hợp các khoản thanh toán: chuyển khoản/thẻ không được vượt phần còn lại, tiền mặt được đưa dư để thối
++  const nonCashPaid = transferAmount + cardAmount;
++  const cashDue = Math.max(0, finalTotal - nonCashPaid); // phần phải trả bằng tiền mặt
++  const totalReceived = cashGiven + nonCashPaid;
++  const changeAmount = Math.max(0, totalReceived - finalTotal);
++  const isPaidEnough = totalReceived >= finalTotal && nonCashPaid <= finalTotal;
+ 
+   // Handle Apply Promo
+   const handleApplyPromo = () => {
+     const promo = promotions.find(p => p.code.toUpperCase() === promoCode.trim().toUpperCase() && p.status === 'active');
+     if (!promo) {
+-      alert('Mã khuyến mãi không hợp lệ hoặc đã hết hạn!');
++      alert('Mã khuyến mãi không hợp lệ hoặc chương trình không còn hoạt động!');
++      return;
++    }
++    if (promo.usageLimit && promo.usedCount >= promo.usageLimit) {
++      alert('Mã khuyến mãi đã hết lượt sử dụng!');
+       return;
+     }
+     if (subtotal < promo.minOrderValue) {
+@@ -192,27 +195,52 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+       alert('Giỏ hàng trống! Vui lòng chọn sản phẩm.');
+       return;
+     }
+-    if (paymentMethod === 'cash' && cashGiven < finalTotal) {
+-      alert('Số tiền khách đưa chưa đủ để thanh toán!');
++    if (nonCashPaid > finalTotal) {
++      alert('Tổng chuyển khoản + thẻ không được vượt quá số tiền phải trả!');
++      return;
++    }
++    if (!isPaidEnough) {
++      alert('Số tiền thanh toán chưa đủ! Hóa đơn chỉ hoàn tất khi tổng các khoản đã nhận >= số tiền phải trả.');
++      return;
++    }
++    if ((transferAmount > 0 && !transferRef.trim())) {
++      alert('Vui lòng nhập mã giao dịch chuyển khoản để xác nhận đã nhận tiền!');
++      return;
++    }
++    if ((cardAmount > 0 && !cardRef.trim())) {
++      alert('Vui lòng nhập mã chuẩn chi thẻ!');
+       return;
+     }
+ 
++    const nowStr = new Date().toLocaleString('vi-VN');
++    const stamp = Date.now();
+     const newInvoiceCode = `HD-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${Math.floor(100 + Math.random() * 900)}`;
+-    const earnedPoints = Math.floor(finalTotal / 10000); // 10k = 1 point
++
++    // Tách từng khoản thanh toán; tiền mặt ghi nhận sau khi trừ tiền thối
++    const cashApplied = Math.min(cashGiven, cashDue);
++    const payments: InvoicePayment[] = [];
++    if (cashApplied > 0) {
++      payments.push({ id: `pay-${stamp}-c`, method: 'cash', amount: cashApplied, status: 'confirmed', confirmedById: currentStaff.id, confirmedAt: nowStr });
++    }
++    if (transferAmount > 0) {
++      payments.push({ id: `pay-${stamp}-t`, method: 'transfer', amount: transferAmount, status: 'confirmed', reference: transferRef.trim(), confirmedById: currentStaff.id, confirmedAt: nowStr });
++    }
++    if (cardAmount > 0) {
++      payments.push({ id: `pay-${stamp}-k`, method: 'card', amount: cardAmount, status: 'confirmed', reference: cardRef.trim(), confirmedById: currentStaff.id, confirmedAt: nowStr });
++    }
++    const paymentMethod: PaymentMethod = payments.length > 1 ? 'mixed' : payments[0]?.method ?? 'cash';
+ 
+     const newInvoice: Invoice = {
+-      id: `inv-${Date.now()}`,
++      id: `inv-${stamp}`,
+       code: newInvoiceCode,
+-      createdAt: new Date().toLocaleString('vi-VN'),
+-      cashierId: 'staff-01',
+-      cashierName: 'Đặng Hoàng Phúc (Admin)',
+-      customerId: selectedCustomer?.id,
+-      customerName: selectedCustomer?.name,
+-      customerPhone: selectedCustomer?.phone,
++      createdAt: nowStr,
++      cashierId: currentStaff.id,
++      cashierName: currentStaff.name,
+       items: cart.map(item => ({
+         productId: item.product.id,
+         productCode: item.product.code,
+         productName: item.product.name,
++        batchId: item.selectedBatch?.id,
+         batchCode: item.selectedBatch?.batchCode || 'LOTH-DEFAULT',
+         unit: item.product.unit,
+         quantity: item.quantity,
+@@ -223,12 +251,12 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+       subtotal,
+       discountAmount: totalDiscount,
+       voucherCode: appliedPromo?.code,
+-      pointsUsed: usePoints ? maxUsablePoints : 0,
+-      pointsEarned: earnedPoints,
+       finalTotal,
+       paymentMethod,
+-      receivedAmount: paymentMethod === 'cash' ? cashGiven : finalTotal,
+-      changeAmount: paymentMethod === 'cash' ? changeAmount : 0,
++      payments,
++      receivedAmount: totalReceived,
++      changeAmount,
++      paidAt: nowStr,
+       status: 'completed',
+       notes
+     };
+@@ -239,9 +267,11 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+     setCart([]);
+     setAppliedPromo(null);
+     setPromoCode('');
+-    setSelectedCustomer(null);
+-    setUsePoints(false);
+     setCashGiven(0);
++    setTransferAmount(0);
++    setTransferRef('');
++    setCardAmount(0);
++    setCardRef('');
+     setNotes('');
+   };
+ 
+@@ -336,7 +366,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+                         : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                     }`}
+                   >
+-                    {cat === 'all' ? 'Tất cả sản phẩm TH' : cat}
++                    {cat === 'all' ? 'Tất cả sản phẩm TH' : CATEGORY_LABELS[cat as keyof typeof CATEGORY_LABELS]}
+                   </button>
+                 ))}
+               </div>
+@@ -476,75 +506,6 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+                 )}
+               </div>
+ 
+-              {/* Customer TH Club Lookup (1.3 & 4.2) */}
+-              <div className="border-t border-slate-100 pt-3 space-y-2">
+-                <label className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+-                  <UserCheck className="w-3.5 h-3.5 text-[#004885]" />
+-                  <span>Khách hàng thành viên (TH Club)</span>
+-                </label>
+-                {selectedCustomer ? (
+-                  <div className="bg-sky-50 p-2.5 rounded-lg border border-sky-200 flex items-center justify-between">
+-                    <div>
+-                      <p className="text-xs font-bold text-sky-950">
+-                        {selectedCustomer.name} - {selectedCustomer.phone}
+-                      </p>
+-                      <p className="text-[10px] text-sky-800">
+-                        Hạng: <span className="font-bold">{selectedCustomer.tier}</span> | Điểm khả dụng: <span className="font-bold text-emerald-700">{selectedCustomer.points}</span>
+-                      </p>
+-                    </div>
+-                    <button
+-                      onClick={() => {
+-                        setSelectedCustomer(null);
+-                        setUsePoints(false);
+-                      }}
+-                      className="text-xs text-slate-400 hover:text-rose-600 font-bold"
+-                    >
+-                      Bỏ chọn
+-                    </button>
+-                  </div>
+-                ) : (
+-                  <div className="flex gap-1.5">
+-                    <input
+-                      type="text"
+-                      placeholder="Nhập số điện thoại khách hàng..."
+-                      value={customerSearch}
+-                      onChange={(e) => setCustomerSearch(e.target.value)}
+-                      className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-hidden focus:bg-white"
+-                    />
+-                    <button
+-                      onClick={() => {
+-                        const found = customers.find(c => c.phone.includes(customerSearch.trim()) || c.name.toLowerCase().includes(customerSearch.toLowerCase()));
+-                        if (found) {
+-                          setSelectedCustomer(found);
+-                          setCustomerSearch('');
+-                        } else {
+-                          alert('Không tìm thấy khách hàng! Vui lòng kiểm tra lại số điện thoại.');
+-                        }
+-                      }}
+-                      className="bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs px-3 py-1.5 rounded-lg font-semibold"
+-                    >
+-                      Tìm
+-                    </button>
+-                  </div>
+-                )}
+-
+-                {selectedCustomer && selectedCustomer.points > 0 && (
+-                  <div className="flex items-center justify-between bg-amber-50 px-3 py-1.5 rounded border border-amber-200 text-xs">
+-                    <label className="flex items-center gap-2 cursor-pointer">
+-                      <input
+-                        type="checkbox"
+-                        checked={usePoints}
+-                        onChange={(e) => setUsePoints(e.target.checked)}
+-                        className="rounded text-[#004885]"
+-                      />
+-                      <span className="text-amber-900 font-medium">
+-                        Đổi {maxUsablePoints} điểm True Point (-{(maxUsablePoints * 1000).toLocaleString('vi-VN')} đ)
+-                      </span>
+-                    </label>
+-                  </div>
+-                )}
+-              </div>
+-
+               {/* Promotion Voucher (1.3) */}
+               <div className="border-t border-slate-100 pt-3 space-y-2">
+                 <label className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+@@ -565,7 +526,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+                   <div className="flex gap-1.5">
+                     <input
+                       type="text"
+-                      placeholder="Nhập mã THSUMMER10, THVIP20K..."
++                      placeholder="Nhập mã voucher (VD: THVIP20K)..."
+                       value={promoCode}
+                       onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
+                       className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-hidden focus:bg-white font-mono uppercase"
+@@ -580,85 +541,93 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+                 )}
+               </div>
+ 
+-              {/* Payment Methods */}
++              {/* Thanh toán nhiều hình thức (tiền mặt + chuyển khoản + thẻ) */}
+               <div className="border-t border-slate-100 pt-3 space-y-2">
+-                <label className="text-[11px] font-bold text-slate-700">Phương thức thanh toán</label>
+-                <div className="grid grid-cols-3 gap-2">
+-                  <button
+-                    onClick={() => setPaymentMethod('cash')}
+-                    className={`p-2 rounded-lg border text-xs font-semibold flex flex-col items-center gap-1 transition-all ${
+-                      paymentMethod === 'cash'
+-                        ? 'border-[#004885] bg-sky-50 text-[#004885]'
+-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+-                    }`}
+-                  >
+-                    <Banknote className="w-4 h-4" />
+-                    <span>Tiền mặt</span>
+-                  </button>
+-                  <button
+-                    onClick={() => setPaymentMethod('transfer')}
+-                    className={`p-2 rounded-lg border text-xs font-semibold flex flex-col items-center gap-1 transition-all ${
+-                      paymentMethod === 'transfer'
+-                        ? 'border-[#004885] bg-sky-50 text-[#004885]'
+-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+-                    }`}
+-                  >
+-                    <QrCode className="w-4 h-4" />
+-                    <span>VietQR</span>
+-                  </button>
+-                  <button
+-                    onClick={() => setPaymentMethod('card')}
+-                    className={`p-2 rounded-lg border text-xs font-semibold flex flex-col items-center gap-1 transition-all ${
+-                      paymentMethod === 'card'
+-                        ? 'border-[#004885] bg-sky-50 text-[#004885]'
+-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+-                    }`}
+-                  >
+-                    <CreditCard className="w-4 h-4" />
+-                    <span>Thẻ POS</span>
+-                  </button>
++                <label className="text-[11px] font-bold text-slate-700">Thanh toán (có thể kết hợp nhiều hình thức)</label>
++
++                {/* Chuyển khoản */}
++                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 space-y-1.5">
++                  <div className="flex items-center justify-between text-xs">
++                    <span className="text-slate-600 flex items-center gap-1.5"><QrCode className="w-4 h-4" /> Chuyển khoản (VietQR):</span>
++                    <input
++                      type="number"
++                      value={transferAmount || ''}
++                      onChange={(e) => setTransferAmount(Math.max(0, Number(e.target.value)))}
++                      placeholder="Số tiền..."
++                      className="w-32 px-2 py-1 bg-white border border-slate-300 rounded text-right font-bold text-xs"
++                    />
++                  </div>
++                  {transferAmount > 0 && (
++                    <input
++                      type="text"
++                      value={transferRef}
++                      onChange={(e) => setTransferRef(e.target.value)}
++                      placeholder="Mã giao dịch chuyển khoản (đã nhận tiền)..."
++                      className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs font-mono"
++                    />
++                  )}
+                 </div>
+ 
+-                {paymentMethod === 'cash' && (
+-                  <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 space-y-2">
+-                    <div className="flex items-center justify-between text-xs">
+-                      <span className="text-slate-600">Tiền khách đưa:</span>
+-                      <input
+-                        type="number"
+-                        value={cashGiven || ''}
+-                        onChange={(e) => setCashGiven(Number(e.target.value))}
+-                        placeholder="Nhập số tiền..."
+-                        className="w-32 px-2 py-1 bg-white border border-slate-300 rounded text-right font-bold text-xs"
+-                      />
+-                    </div>
+-                    {/* Fast Denominations */}
+-                    <div className="flex gap-1 justify-end">
+-                      {[100000, 200000, 500000].map(amt => (
+-                        <button
+-                          key={amt}
+-                          onClick={() => setCashGiven(amt)}
+-                          className="px-2 py-0.5 text-[10px] bg-white border border-slate-300 rounded hover:bg-slate-100 font-medium"
+-                        >
+-                          {(amt / 1000)}k
+-                        </button>
+-                      ))}
++                {/* Thẻ */}
++                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 space-y-1.5">
++                  <div className="flex items-center justify-between text-xs">
++                    <span className="text-slate-600 flex items-center gap-1.5"><CreditCard className="w-4 h-4" /> Thẻ POS:</span>
++                    <input
++                      type="number"
++                      value={cardAmount || ''}
++                      onChange={(e) => setCardAmount(Math.max(0, Number(e.target.value)))}
++                      placeholder="Số tiền..."
++                      className="w-32 px-2 py-1 bg-white border border-slate-300 rounded text-right font-bold text-xs"
++                    />
++                  </div>
++                  {cardAmount > 0 && (
++                    <input
++                      type="text"
++                      value={cardRef}
++                      onChange={(e) => setCardRef(e.target.value)}
++                      placeholder="Mã chuẩn chi thẻ..."
++                      className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs font-mono"
++                    />
++                  )}
++                </div>
++
++                {/* Tiền mặt */}
++                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 space-y-2">
++                  <div className="flex items-center justify-between text-xs">
++                    <span className="text-slate-600 flex items-center gap-1.5"><Banknote className="w-4 h-4" /> Tiền mặt khách đưa:</span>
++                    <input
++                      type="number"
++                      value={cashGiven || ''}
++                      onChange={(e) => setCashGiven(Math.max(0, Number(e.target.value)))}
++                      placeholder="Nhập số tiền..."
++                      className="w-32 px-2 py-1 bg-white border border-slate-300 rounded text-right font-bold text-xs"
++                    />
++                  </div>
++                  <div className="flex gap-1 justify-end">
++                    {[100000, 200000, 500000].map(amt => (
+                       <button
+-                        onClick={() => setCashGiven(finalTotal)}
+-                        className="px-2 py-0.5 text-[10px] bg-sky-100 text-sky-800 rounded font-bold"
++                        key={amt}
++                        onClick={() => setCashGiven(amt)}
++                        className="px-2 py-0.5 text-[10px] bg-white border border-slate-300 rounded hover:bg-slate-100 font-medium"
+                       >
+-                        Đủ tiền
++                        {(amt / 1000)}k
+                       </button>
+-                    </div>
+-                    {cashGiven > 0 && (
+-                      <div className="flex justify-between text-xs font-semibold border-t border-slate-200 pt-1">
+-                        <span>Tiền thừa trả khách:</span>
+-                        <span className={cashGiven >= finalTotal ? 'text-emerald-700' : 'text-rose-600'}>
+-                          {changeAmount.toLocaleString('vi-VN')} đ
+-                        </span>
+-                      </div>
+-                    )}
++                    ))}
++                    <button
++                      onClick={() => setCashGiven(cashDue)}
++                      className="px-2 py-0.5 text-[10px] bg-sky-100 text-sky-800 rounded font-bold"
++                    >
++                      Đủ tiền
++                    </button>
+                   </div>
+-                )}
++                </div>
++
++                <div className="flex justify-between text-xs font-semibold border-t border-slate-200 pt-1">
++                  <span>{isPaidEnough ? 'Tiền thừa trả khách:' : 'Còn thiếu:'}</span>
++                  <span className={isPaidEnough ? 'text-emerald-700' : 'text-rose-600'}>
++                    {(isPaidEnough ? changeAmount : Math.max(0, finalTotal - totalReceived)).toLocaleString('vi-VN')} đ
++                  </span>
++                </div>
+               </div>
+ 
+               {/* Order Summary Breakdown */}
+@@ -683,7 +652,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+               <button
+                 id="btn-checkout-sale"
+                 onClick={handleCheckout}
+-                disabled={cart.length === 0}
++                disabled={cart.length === 0 || !isPaidEnough}
+                 className="w-full py-3 rounded-xl bg-[#004885] hover:bg-[#00386b] disabled:bg-slate-300 text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed"
+               >
+                 <span>Hoàn tất & In hóa đơn</span>
+@@ -709,7 +678,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+                   <th className="py-2.5 px-3">Mã HĐ</th>
+                   <th className="py-2.5 px-3">Thời gian</th>
+                   <th className="py-2.5 px-3">Thu ngân</th>
+-                  <th className="py-2.5 px-3">Khách hàng</th>
++                  <th className="py-2.5 px-3">Thanh toán</th>
+                   <th className="py-2.5 px-3">Số món</th>
+                   <th className="py-2.5 px-3 text-right">Tổng thanh toán</th>
+                   <th className="py-2.5 px-3 text-center">Trạng thái</th>
+@@ -722,9 +691,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+                     <td className="py-2.5 px-3 font-bold text-[#004885]">{inv.code}</td>
+                     <td className="py-2.5 px-3 text-slate-600">{inv.createdAt}</td>
+                     <td className="py-2.5 px-3 text-slate-800">{inv.cashierName}</td>
+-                    <td className="py-2.5 px-3 text-slate-700">
+-                      {inv.customerName ? `${inv.customerName} (${inv.customerPhone})` : 'Khách vãng lai'}
+-                    </td>
++                    <td className="py-2.5 px-3 text-slate-700">{PAYMENT_METHOD_LABELS[inv.paymentMethod]}</td>
+                     <td className="py-2.5 px-3 text-slate-600">{inv.items.length} mặt hàng</td>
+                     <td className="py-2.5 px-3 text-right font-bold text-slate-900">
+                       {inv.finalTotal.toLocaleString('vi-VN')} đ
+@@ -732,9 +699,11 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+                     <td className="py-2.5 px-3 text-center">
+                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                         inv.status === 'completed' ? 'bg-emerald-100 text-emerald-800' :
+-                        inv.status === 'returned' ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800'
++                        inv.status === 'returned' ? 'bg-amber-100 text-amber-800' :
++                        inv.status === 'pending_payment' || inv.status === 'pending_approval' ? 'bg-sky-100 text-sky-800' :
++                        'bg-rose-100 text-rose-800'
+                       }`}>
+-                        {inv.status === 'completed' ? 'Đã hoàn tất' : inv.status === 'returned' ? 'Đã đổi trả' : 'Đã hủy'}
++                        {INVOICE_STATUS_LABELS[inv.status]}
+                       </span>
+                     </td>
+                     <td className="py-2.5 px-3 text-right space-x-1.5 whitespace-nowrap">
+@@ -799,6 +768,40 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+               className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-hidden focus:bg-white focus:ring-2 focus:ring-sky-500"
+             />
+ 
++            {/* Hoàn tiền cho khách (invoice_approvals.refundAmount / refundMethod / refundRef) */}
++            <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 space-y-2 text-xs">
++              <div className="flex items-center justify-between">
++                <span className="text-slate-600">Số tiền hoàn lại:</span>
++                <span className="font-bold text-slate-900">{selectedInvoiceForAction.finalTotal.toLocaleString('vi-VN')} đ</span>
++              </div>
++              <div className="flex items-center justify-between gap-2">
++                <span className="text-slate-600">Hoàn bằng:</span>
++                <select
++                  value={refundMethod}
++                  onChange={(e) => setRefundMethod(e.target.value as PaymentMethod)}
++                  className="px-2 py-1 bg-white border border-slate-300 rounded text-xs"
++                >
++                  <option value="cash">{PAYMENT_METHOD_LABELS.cash}</option>
++                  <option value="transfer">{PAYMENT_METHOD_LABELS.transfer}</option>
++                  <option value="card">{PAYMENT_METHOD_LABELS.card}</option>
++                </select>
++              </div>
++              {refundMethod === 'transfer' && (
++                <input
++                  type="text"
++                  value={refundRef}
++                  onChange={(e) => setRefundRef(e.target.value)}
++                  placeholder="Mã giao dịch hoàn tiền..."
++                  className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs font-mono"
++                />
++              )}
++              {!isManager && (
++                <p className="text-[11px] text-amber-700">
++                  Bạn không có quyền duyệt. Thao tác cần Quản lý xác nhận (invoice:approve) trước khi hoàn tiền.
++                </p>
++              )}
++            </div>
++
+             <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+               <button
+                 onClick={() => {
+@@ -810,16 +813,26 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+                 Hủy bỏ
+               </button>
+               <button
++                disabled={!isManager}
+                 onClick={() => {
++                  const approval = {
++                    reason: actionReason || (actionType === 'return' ? 'Khách đổi trả' : 'Hủy hóa đơn sai sót'),
++                    refundAmount: selectedInvoiceForAction.finalTotal,
++                    refundMethod,
++                    refundRef: refundMethod === 'transfer' ? refundRef.trim() || undefined : undefined,
++                    approvedById: currentStaff.id
++                  };
+                   if (actionType === 'return') {
+-                    onReturnInvoice(selectedInvoiceForAction.id, actionReason || 'Khách đổi trả');
++                    onReturnInvoice(selectedInvoiceForAction.id, approval);
+                   } else {
+-                    onCancelInvoice(selectedInvoiceForAction.id, actionReason || 'Hủy hóa đơn sai sót');
++                    onCancelInvoice(selectedInvoiceForAction.id, approval);
+                   }
+                   setSelectedInvoiceForAction(null);
+                   setActionType(null);
++                  setRefundMethod('cash');
++                  setRefundRef('');
+                 }}
+-                className={`px-4 py-1.5 text-xs font-bold text-white rounded-lg ${
++                className={`px-4 py-1.5 text-xs font-bold text-white rounded-lg disabled:opacity-40 disabled:cursor-not-allowed ${
+                   actionType === 'return' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-rose-600 hover:bg-rose-700'
+                 }`}
+               >
+diff --git a/frontend/src/components/products/QuanLyHangHoa.tsx b/frontend/src/components/products/QuanLyHangHoa.tsx
+index 14ab66f..d239e3a 100644
+--- a/frontend/src/components/products/QuanLyHangHoa.tsx
++++ b/frontend/src/components/products/QuanLyHangHoa.tsx
+@@ -13,7 +13,8 @@ import {
+   Calendar,
+   Sparkles
+ } from 'lucide-react';
+-import { Product, Promotion, Category } from '../../types';
++import { Product, Promotion, Category, PromotionScope } from '../../types';
++import { CATEGORY_LABELS, CATEGORY_LIST, PROMOTION_SCOPE_LABELS, PROMOTION_STATUS_LABELS } from '../../lib/labels';
+ 
+ interface QuanLyHangHoaProps {
+   products: Product[];
+@@ -44,7 +45,7 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
+   const [newProd, setNewProd] = useState<Partial<Product>>({
+     code: `TH-MILK-${Math.floor(100 + Math.random() * 900)}`,
+     name: '',
+-    category: 'Sữa tươi tiệt trùng',
++    category: 'SUA_TUOI_TIET_TRUNG',
+     unit: 'Lốc 4 hộp',
+     sellingPrice: 38000,
+     costPrice: 30000,
+@@ -59,23 +60,19 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
+   const [newPromo, setNewPromo] = useState<Partial<Promotion>>({
+     code: 'THPROMO2026',
+     name: '',
++    scope: 'order',
+     discountType: 'percentage',
+     value: 10,
++    maxDiscountAmount: undefined,
+     startDate: '2026-09-20',
+     endDate: '2026-10-20',
+     minOrderValue: 150000,
+-    status: 'active'
++    requiresCode: false,
++    usageLimit: undefined,
++    status: 'scheduled'
+   });
+ 
+-  const categories: Category[] = [
+-    'Sữa tươi tiệt trùng',
+-    'Sữa tươi thanh trùng',
+-    'Sữa chua ăn & uống',
+-    'Bơ & Phô mai tự nhiên',
+-    'Kem TH true ICE CREAM',
+-    'Nước tinh khiết & Nước trái cây',
+-    'Trà tự nhiên TH true TEA'
+-  ];
++  const categories: Category[] = CATEGORY_LIST; // mã enum của DB
+ 
+   const filteredProducts = products.filter(p => {
+     const matchCat = selectedCat === 'all' || p.category === selectedCat;
+@@ -133,7 +130,7 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
+         unit: newProd.unit || 'Hộp',
+         sellingPrice: Number(newProd.sellingPrice),
+         costPrice: Number(newProd.costPrice),
+-        barcode: newProd.barcode || '',
++        barcode: newProd.barcode || `89360360${Date.now().toString().slice(-5)}`, // cột barcode UNIQUE NOT NULL, không gửi chuỗi rỗng
+         minStockLevel: Number(newProd.minStockLevel) || 10,
+         description: newProd.description || '',
+         status: 'active'
+@@ -161,17 +158,52 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
+       alert('Vui lòng nhập mã và tên chương trình khuyến mãi!');
+       return;
+     }
++    if (promotions.some(p => p.code === newPromo.code!.toUpperCase())) {
++      alert('Mã khuyến mãi đã tồn tại!');
++      return;
++    }
++    const value = Number(newPromo.value);
++    if (!(value > 0)) {
++      alert('Giá trị giảm phải lớn hơn 0!');
++      return;
++    }
++    const startDate = newPromo.startDate || '2026-09-20';
++    const endDate = newPromo.endDate || '2026-10-20';
++    if (endDate <= startDate) {
++      alert('Ngày kết thúc phải sau ngày bắt đầu!');
++      return;
++    }
++    const scope = (newPromo.scope || 'order') as PromotionScope;
++    if (scope === 'category' && !newPromo.applicableCategory) {
++      alert('Vui lòng chọn nhóm hàng áp dụng!');
++      return;
++    }
++    if (scope === 'near_expiry' && !newPromo.nearExpiryDays) {
++      alert('Vui lòng nhập số ngày còn hạn dùng để xả hàng!');
++      return;
++    }
++    const today = new Date().toISOString().slice(0, 10);
+     const promoToAdd: Promotion = {
+       id: `promo-${Date.now()}`,
+       code: newPromo.code.toUpperCase(),
+       name: newPromo.name,
++      description: newPromo.description,
++      scope,
+       discountType: newPromo.discountType as 'percentage' | 'fixed_amount',
+-      value: Number(newPromo.value),
+-      startDate: newPromo.startDate || '2026-09-20',
+-      endDate: newPromo.endDate || '2026-10-20',
++      value,
++      maxDiscountAmount: newPromo.discountType === 'percentage' && newPromo.maxDiscountAmount
++        ? Number(newPromo.maxDiscountAmount)
++        : undefined,
++      startDate,
++      endDate,
+       minOrderValue: Number(newPromo.minOrderValue) || 0,
+-      applicableCategory: newPromo.applicableCategory,
+-      status: 'active'
++      applicableCategory: scope === 'category' ? newPromo.applicableCategory : undefined,
++      nearExpiryDays: scope === 'near_expiry' ? Number(newPromo.nearExpiryDays) : undefined,
++      requiresCode: !!newPromo.requiresCode,
++      usageLimit: newPromo.usageLimit ? Number(newPromo.usageLimit) : undefined,
++      usedCount: 0,
++      // Vòng đời: chưa tới ngày bắt đầu -> scheduled, đã tới ngày -> active
++      status: startDate > today ? 'scheduled' : 'active'
+     };
+     onAddPromotion(promoToAdd);
+     setShowAddPromoModal(false);
+@@ -304,7 +336,7 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
+                       <td className="py-2.5 px-3 font-semibold text-slate-900 max-w-xs">{p.name}</td>
+                       <td className="py-2.5 px-3 text-slate-600">
+                         <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-[11px]">
+-                          {p.category}
++                          {CATEGORY_LABELS[p.category] ?? p.category}
+                         </span>
+                       </td>
+                       <td className="py-2.5 px-3 text-slate-600">{p.unit}</td>
+@@ -391,7 +423,7 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
+                     {count} sản phẩm
+                   </span>
+                 </div>
+-                <h4 className="font-bold text-sm text-slate-900">{cat}</h4>
++                <h4 className="font-bold text-sm text-slate-900">{CATEGORY_LABELS[cat]}</h4>
+                 <p className="text-xs text-slate-500">
+                   Dòng sản phẩm nguyên chất tự nhiên tiêu chuẩn trang trại TH.
+                 </p>
+@@ -411,8 +443,13 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
+                   <span className="font-mono font-bold text-xs bg-rose-50 text-rose-700 border border-rose-200 px-2.5 py-1 rounded">
+                     {promo.code}
+                   </span>
+-                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
+-                    {promo.status === 'active' ? 'Đang áp dụng' : 'Hết hạn'}
++                  <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${
++                    promo.status === 'active' ? 'text-emerald-700 bg-emerald-50' :
++                    promo.status === 'scheduled' ? 'text-sky-700 bg-sky-50' :
++                    promo.status === 'paused' || promo.status === 'draft' ? 'text-amber-700 bg-amber-50' :
++                    'text-slate-600 bg-slate-100'
++                  }`}>
++                    {PROMOTION_STATUS_LABELS[promo.status]}
+                   </span>
+                 </div>
+                 <h4 className="font-bold text-sm text-slate-900">{promo.name}</h4>
+@@ -421,6 +458,22 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
+                     {promo.discountType === 'percentage' ? `Giảm ${promo.value}%` : `Giảm ${promo.value.toLocaleString('vi-VN')} đ`}
+                   </span>
+                 </p>
++                <p className="text-[11px] text-slate-500">
++                  Phạm vi: {PROMOTION_SCOPE_LABELS[promo.scope]}
++                  {promo.scope === 'category' && promo.applicableCategory ? ` - ${CATEGORY_LABELS[promo.applicableCategory]}` : ''}
++                  {promo.scope === 'near_expiry' && promo.nearExpiryDays ? ` (còn <= ${promo.nearExpiryDays} ngày HSD)` : ''}
++                  {' • '}{promo.requiresCode ? 'Nhập mã khi bán' : 'Tự động áp dụng'}
++                </p>
++                {promo.maxDiscountAmount ? (
++                  <p className="text-[11px] text-slate-500">
++                    Giảm tối đa: {promo.maxDiscountAmount.toLocaleString('vi-VN')} đ
++                  </p>
++                ) : null}
++                {promo.usageLimit ? (
++                  <p className="text-[11px] text-slate-500">
++                    Đã dùng: {promo.usedCount}/{promo.usageLimit} lượt
++                  </p>
++                ) : null}
+                 {promo.minOrderValue > 0 && (
+                   <p className="text-[11px] text-slate-500">
+                     Đơn tối thiểu: {promo.minOrderValue.toLocaleString('vi-VN')} đ
+@@ -492,7 +545,7 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
+                     onChange={(e) => setNewProd({...newProd, category: e.target.value as Category})}
+                     className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+                   >
+-                    {categories.map(c => <option key={c} value={c}>{c}</option>)}
++                    {categories.map(c => <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>)}
+                   </select>
+                 </div>
+                 <div>
+@@ -586,6 +639,46 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
+                 />
+               </div>
+ 
++              <div className="grid grid-cols-2 gap-3">
++                <div>
++                  <label className="font-bold text-slate-700 block mb-1">Phạm vi áp dụng</label>
++                  <select
++                    value={newPromo.scope}
++                    onChange={(e) => setNewPromo({...newPromo, scope: e.target.value as PromotionScope})}
++                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
++                  >
++                    {(Object.keys(PROMOTION_SCOPE_LABELS) as PromotionScope[]).map(sc => (
++                      <option key={sc} value={sc}>{PROMOTION_SCOPE_LABELS[sc]}</option>
++                    ))}
++                  </select>
++                </div>
++                {newPromo.scope === 'category' && (
++                  <div>
++                    <label className="font-bold text-slate-700 block mb-1">Nhóm hàng</label>
++                    <select
++                      value={newPromo.applicableCategory || ''}
++                      onChange={(e) => setNewPromo({...newPromo, applicableCategory: (e.target.value || undefined) as Category | undefined})}
++                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
++                    >
++                      <option value="">-- Chọn nhóm hàng --</option>
++                      {categories.map(c => <option key={c} value={c}>{CATEGORY_LABELS[c]}</option>)}
++                    </select>
++                  </div>
++                )}
++                {newPromo.scope === 'near_expiry' && (
++                  <div>
++                    <label className="font-bold text-slate-700 block mb-1">Lô còn &lt;= (ngày HSD)</label>
++                    <input
++                      type="number"
++                      min={1}
++                      value={newPromo.nearExpiryDays || ''}
++                      onChange={(e) => setNewPromo({...newPromo, nearExpiryDays: Number(e.target.value)})}
++                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-bold"
++                    />
++                  </div>
++                )}
++              </div>
++
+               <div className="grid grid-cols-2 gap-3">
+                 <div>
+                   <label className="font-bold text-slate-700 block mb-1">Loại giảm giá</label>
+@@ -610,6 +703,43 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
+                 </div>
+               </div>
+ 
++              <div className="grid grid-cols-2 gap-3">
++                {newPromo.discountType === 'percentage' && (
++                  <div>
++                    <label className="font-bold text-slate-700 block mb-1">Giảm tối đa (đ)</label>
++                    <input
++                      type="number"
++                      min={0}
++                      value={newPromo.maxDiscountAmount || ''}
++                      onChange={(e) => setNewPromo({...newPromo, maxDiscountAmount: Number(e.target.value) || undefined})}
++                      placeholder="Để trống = không giới hạn"
++                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
++                    />
++                  </div>
++                )}
++                <div>
++                  <label className="font-bold text-slate-700 block mb-1">Tổng lượt dùng tối đa</label>
++                  <input
++                    type="number"
++                    min={1}
++                    value={newPromo.usageLimit || ''}
++                    onChange={(e) => setNewPromo({...newPromo, usageLimit: Number(e.target.value) || undefined})}
++                    placeholder="Để trống = không giới hạn"
++                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
++                  />
++                </div>
++              </div>
++
++              <label className="flex items-center gap-2 cursor-pointer">
++                <input
++                  type="checkbox"
++                  checked={!!newPromo.requiresCode}
++                  onChange={(e) => setNewPromo({...newPromo, requiresCode: e.target.checked})}
++                  className="rounded text-[#004885]"
++                />
++                <span className="text-slate-700 font-medium">Thu ngân phải nhập mã mới được giảm (không tự động áp dụng)</span>
++              </label>
++
+               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                 <button
+                   type="button"
+@@ -622,7 +752,7 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
+                   type="submit"
+                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold shadow-xs"
+                 >
+-                  Kích hoạt khuyến mãi
++                  Tạo chương trình khuyến mãi
+                 </button>
+               </div>
+             </form>
+diff --git a/frontend/src/components/reports/BaoCaoThongKe.tsx b/frontend/src/components/reports/BaoCaoThongKe.tsx
+index 0036e2f..f2dfb68 100644
+--- a/frontend/src/components/reports/BaoCaoThongKe.tsx
++++ b/frontend/src/components/reports/BaoCaoThongKe.tsx
+@@ -26,13 +26,15 @@ export const BaoCaoThongKe: React.FC<BaoCaoThongKeProps> = ({
+   const [timeRange, setTimeRange] = useState<'today' | 'month' | 'year'>('month');
+ 
+   // 7.1 Doanh thu calculations
+-  const totalRevenue = invoices.reduce((acc, inv) => acc + inv.finalTotal, 0);
+-  const totalInvoicesCount = invoices.length;
++  // Chỉ tính hóa đơn đã hoàn tất; hóa đơn đổi trả/hủy/chờ thanh toán/chờ duyệt không vào doanh thu
++  const completedInvoices = invoices.filter(inv => inv.status === 'completed');
++  const totalRevenue = completedInvoices.reduce((acc, inv) => acc + inv.finalTotal, 0);
++  const totalInvoicesCount = completedInvoices.length;
+   
+   // Calculate top selling products (7.2)
+   const productSalesMap: { [productId: string]: { name: string; quantity: number; revenue: number } } = {};
+   
+-  invoices.forEach(inv => {
++  completedInvoices.forEach(inv => {
+     inv.items.forEach(item => {
+       if (!productSalesMap[item.productId]) {
+         productSalesMap[item.productId] = {
+diff --git a/frontend/src/components/staff/QuanLyNhanVien.tsx b/frontend/src/components/staff/QuanLyNhanVien.tsx
+index e15dfdf..9b5a5ab 100644
+--- a/frontend/src/components/staff/QuanLyNhanVien.tsx
++++ b/frontend/src/components/staff/QuanLyNhanVien.tsx
+@@ -12,6 +12,7 @@ import {
+   X
+ } from 'lucide-react';
+ import { Staff } from '../../types';
++import { SHIFT_LABELS, SHIFT_LIST } from '../../lib/labels';
+ 
+ interface QuanLyNhanVienProps {
+   staffList: Staff[];
+@@ -33,7 +34,7 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
+     email: '',
+     username: '',
+     role: 'cashier',
+-    shift: 'Sáng (06:00 - 14:00)',
++    shift: 'SANG',
+     status: 'active'
+   });
+ 
+@@ -45,8 +46,12 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
+ 
+   const handleCreateStaff = (e: React.FormEvent) => {
+     e.preventDefault();
+-    if (!newStaff.name || !newStaff.username) {
+-      alert('Vui lòng nhập tên và tên đăng nhập nhân viên!');
++    if (!newStaff.name || !newStaff.username || !newStaff.email) {
++      alert('Vui lòng nhập tên, tên đăng nhập và email nhân viên!');
++      return;
++    }
++    if (staffList.some(s => s.username === newStaff.username || s.email === newStaff.email || s.code === newStaff.code)) {
++      alert('Mã nhân viên, tên đăng nhập hoặc email đã tồn tại!');
+       return;
+     }
+     const staffToAdd: Staff = {
+@@ -54,11 +59,13 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
+       code: newStaff.code || `NV0${staffList.length + 1}`,
+       name: newStaff.name,
+       phone: newStaff.phone || '',
+-      email: newStaff.email || '',
++      email: newStaff.email,
+       username: newStaff.username,
+-      role: newStaff.role as any || 'cashier',
++      password: '123456', // mật khẩu khởi tạo, server sẽ băm bcrypt (không lưu plaintext)
++      role: newStaff.role || 'cashier',
+       status: 'active',
+-      shift: newStaff.shift as any || 'Sáng (06:00 - 14:00)'
++      shift: newStaff.shift || 'SANG',
++      mustChangePassword: true // bắt buộc đổi mật khẩu ở lần đăng nhập đầu
+     };
+     onAddStaff(staffToAdd);
+     setShowAddModal(false);
+@@ -66,8 +73,6 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
+ 
+   const getRoleBadge = (role: Staff['role']) => {
+     switch (role) {
+-      case 'admin':
+-        return <span className="bg-purple-100 text-purple-800 px-2 py-0.5 rounded font-bold text-[10px]">Quản trị hệ thống (Admin)</span>;
+       case 'manager':
+         return <span className="bg-sky-100 text-sky-800 px-2 py-0.5 rounded font-bold text-[10px]">Quản lý cửa hàng (Store Manager)</span>;
+       case 'cashier':
+@@ -82,7 +87,7 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
+       {/* Top Header */}
+       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+         <div>
+-          <h3 className="font-bold text-sm text-slate-900">5. Quản lý nhân viên & Phân quyền</h3>
++          <h3 className="font-bold text-sm text-slate-900">4. Quản lý nhân viên & Phân quyền</h3>
+           <p className="text-xs text-slate-500">Phân quyền tài khoản bảo mật và quản lý lịch phân ca làm việc tại cửa hàng</p>
+         </div>
+ 
+@@ -104,21 +109,17 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
+             <span>5.1 Ma trận phân quyền chức năng</span>
+           </h4>
+           <div className="space-y-2 text-xs">
+-            <div className="p-2 bg-purple-50 rounded border border-purple-100">
+-              <span className="font-bold text-purple-900 block">Admin / Chủ cửa hàng</span>
+-              <span className="text-[11px] text-purple-700">Toàn quyền cấu hình, tài chính, báo cáo, phân quyền.</span>
+-            </div>
+             <div className="p-2 bg-sky-50 rounded border border-sky-100">
+               <span className="font-bold text-sky-900 block">Quản lý cửa hàng</span>
+-              <span className="text-[11px] text-sky-700">Duyệt hủy hóa đơn, chỉnh giá bán, khuyến mãi, quản lý ca.</span>
++              <span className="text-[11px] text-sky-700">Toàn quyền: duyệt đổi trả/hoàn tiền, duyệt kết ca và kiểm kê, chỉnh giá, khuyến mãi, tài khoản & phân quyền, báo cáo.</span>
+             </div>
+             <div className="p-2 bg-emerald-50 rounded border border-emerald-100">
+               <span className="font-bold text-emerald-900 block">Thu ngân (Cashier)</span>
+-              <span className="text-[11px] text-emerald-700">Tra cứu sản phẩm, tạo đơn POS, thanh toán, tích điểm.</span>
++              <span className="text-[11px] text-emerald-700">Tra cứu sản phẩm, tạo đơn POS, thanh toán nhiều hình thức, xác nhận chuyển khoản, mở/kết ca thu ngân.</span>
+             </div>
+             <div className="p-2 bg-amber-50 rounded border border-amber-100">
+               <span className="font-bold text-amber-900 block">Thủ kho (Warehouse)</span>
+-              <span className="text-[11px] text-amber-700">Nhập kho lô hàng, kiểm soát HSD, kiểm kê kho.</span>
++              <span className="text-[11px] text-amber-700">Nhập kho lô hàng, xuất kho, kiểm soát HSD, kiểm kê kho, lập đơn đặt hàng.</span>
+             </div>
+           </div>
+         </div>
+@@ -161,17 +162,19 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
+                     <td className="py-2.5 px-3">
+                       <select
+                         value={s.shift}
+-                        onChange={(e) => onUpdateShift(s.id, e.target.value as any)}
++                        onChange={(e) => onUpdateShift(s.id, e.target.value as Staff['shift'])}
+                         className="p-1 bg-slate-50 border border-slate-200 rounded text-xs text-slate-800 font-medium"
+                       >
+-                        <option value="Sáng (06:00 - 14:00)">Sáng (06:00 - 14:00)</option>
+-                        <option value="Chiều (14:00 - 22:00)">Chiều (14:00 - 22:00)</option>
+-                        <option value="Hành chính">Hành chính</option>
++                        {SHIFT_LIST.map(sh => (
++                          <option key={sh} value={sh}>{SHIFT_LABELS[sh]}</option>
++                        ))}
+                       </select>
+                     </td>
+                     <td className="py-2.5 px-3 text-center">
+-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+-                        Đang làm việc
++                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
++                        s.status === 'active' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-600'
++                      }`}>
++                        {s.status === 'active' ? 'Đang làm việc' : 'Ngừng hoạt động'}
+                       </span>
+                     </td>
+                   </tr>
+@@ -247,6 +250,7 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
+                     value={newStaff.email}
+                     onChange={(e) => setNewStaff({...newStaff, email: e.target.value})}
+                     className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
++                    required
+                   />
+                 </div>
+               </div>
+@@ -256,30 +260,29 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
+                   <label className="font-bold text-slate-700 block mb-1">Chức vụ / Vai trò</label>
+                   <select
+                     value={newStaff.role}
+-                    onChange={(e) => setNewStaff({...newStaff, role: e.target.value as any})}
++                    onChange={(e) => setNewStaff({...newStaff, role: e.target.value as Staff['role']})}
+                     className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+                   >
+                     <option value="cashier">Thu ngân (Cashier)</option>
+                     <option value="warehouse">Thủ kho (Warehouse)</option>
+                     <option value="manager">Quản lý cửa hàng</option>
+-                    <option value="admin">Quản trị viên (Admin)</option>
+                   </select>
+                 </div>
+                 <div>
+                   <label className="font-bold text-slate-700 block mb-1">Phân ca làm việc</label>
+                   <select
+                     value={newStaff.shift}
+-                    onChange={(e) => setNewStaff({...newStaff, shift: e.target.value as any})}
++                    onChange={(e) => setNewStaff({...newStaff, shift: e.target.value as Staff['shift']})}
+                     className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+                   >
+-                    <option value="Sáng (06:00 - 14:00)">Sáng (06:00 - 14:00)</option>
+-                    <option value="Chiều (14:00 - 22:00)">Chiều (14:00 - 22:00)</option>
+-                    <option value="Hành chính">Hành chính</option>
++                    {SHIFT_LIST.map(sh => (
++                      <option key={sh} value={sh}>{SHIFT_LABELS[sh]}</option>
++                    ))}
+                   </select>
+                 </div>
+               </div>
+ 
+-              <p className="text-[11px] text-slate-500">Mật khẩu khởi tạo mặc định cho tài khoản mới: <span className="font-mono font-bold text-slate-800">123456</span></p>
++              <p className="text-[11px] text-slate-500">Mật khẩu khởi tạo (bắt buộc đổi ở lần đăng nhập đầu): <span className="font-mono font-bold text-slate-800">123456</span></p>
+ 
+               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                 <button
+diff --git a/frontend/src/data/initialData.ts b/frontend/src/data/initialData.ts
+index 80de3c7..d9c2b1f 100644
+--- a/frontend/src/data/initialData.ts
++++ b/frontend/src/data/initialData.ts
+@@ -1,11 +1,11 @@
+-import { Product, Batch, Customer, Staff, Supplier, Promotion, Invoice, PurchaseOrder } from '../types';
++import { Product, Batch, Staff, Supplier, Promotion, Invoice, PurchaseOrder } from '../types';
+ 
+ export const INITIAL_PRODUCTS: Product[] = [
+   {
+     id: 'prod-01',
+     code: 'TH-MILK-001',
+     name: 'Sữa tươi tiệt trùng TH true MILK Ít đường 180ml',
+-    category: 'Sữa tươi tiệt trùng',
++    category: 'SUA_TUOI_TIET_TRUNG',
+     unit: 'Lốc 4 hộp',
+     sellingPrice: 38000,
+     costPrice: 31000,
+@@ -19,7 +19,7 @@ export const INITIAL_PRODUCTS: Product[] = [
+     id: 'prod-02',
+     code: 'TH-MILK-002',
+     name: 'Sữa tươi tiệt trùng TH true MILK Nguyên chất 180ml',
+-    category: 'Sữa tươi tiệt trùng',
++    category: 'SUA_TUOI_TIET_TRUNG',
+     unit: 'Thùng 48 hộp',
+     sellingPrice: 435000,
+     costPrice: 365000,
+@@ -32,7 +32,7 @@ export const INITIAL_PRODUCTS: Product[] = [
+     id: 'prod-03',
+     code: 'TH-MILK-003',
+     name: 'Sữa tươi thanh trùng TH true MILK Nguyên chất 900ml',
+-    category: 'Sữa tươi thanh trùng',
++    category: 'SUA_TUOI_THANH_TRUNG',
+     unit: 'Chai 900ml',
+     sellingPrice: 42000,
+     costPrice: 33000,
+@@ -45,7 +45,7 @@ export const INITIAL_PRODUCTS: Product[] = [
+     id: 'prod-04',
+     code: 'TH-YOGURT-001',
+     name: 'Sữa chua ăn TH true YOGURT Nha đam tự nhiên',
+-    category: 'Sữa chua ăn & uống',
++    category: 'SUA_CHUA',
+     unit: 'Vỉ 4 hộp',
+     sellingPrice: 32000,
+     costPrice: 24500,
+@@ -59,7 +59,7 @@ export const INITIAL_PRODUCTS: Product[] = [
+     id: 'prod-05',
+     code: 'TH-YOGURT-002',
+     name: 'Sữa chua uống tiệt trùng TH true YOGURT Vị Dâu 180ml',
+-    category: 'Sữa chua ăn & uống',
++    category: 'SUA_CHUA',
+     unit: 'Lốc 4 hộp',
+     sellingPrice: 36000,
+     costPrice: 28000,
+@@ -72,7 +72,7 @@ export const INITIAL_PRODUCTS: Product[] = [
+     id: 'prod-06',
+     code: 'TH-CHEESE-001',
+     name: 'Phô mai tự nhiên TH true CHEESE Mozzarella 200g',
+-    category: 'Bơ & Phô mai tự nhiên',
++    category: 'BO_PHOMAI',
+     unit: 'Gói 200g',
+     sellingPrice: 78000,
+     costPrice: 62000,
+@@ -85,7 +85,7 @@ export const INITIAL_PRODUCTS: Product[] = [
+     id: 'prod-07',
+     code: 'TH-BUTTER-001',
+     name: 'Bơ lạt tự nhiên TH true BUTTER 100g',
+-    category: 'Bơ & Phô mai tự nhiên',
++    category: 'BO_PHOMAI',
+     unit: 'Hộp 100g',
+     sellingPrice: 48000,
+     costPrice: 38000,
+@@ -98,7 +98,7 @@ export const INITIAL_PRODUCTS: Product[] = [
+     id: 'prod-08',
+     code: 'TH-ICE-001',
+     name: 'Kem que TH true ICE CREAM Socola tự nhiên 70g',
+-    category: 'Kem TH true ICE CREAM',
++    category: 'KEM',
+     unit: 'Cây 70g',
+     sellingPrice: 22000,
+     costPrice: 16000,
+@@ -111,7 +111,7 @@ export const INITIAL_PRODUCTS: Product[] = [
+     id: 'prod-09',
+     code: 'TH-WATER-001',
+     name: 'Nước tinh khiết TH true WATER 500ml',
+-    category: 'Nước tinh khiết & Nước trái cây',
++    category: 'NUOC',
+     unit: 'Chai 500ml',
+     sellingPrice: 6000,
+     costPrice: 3500,
+@@ -124,7 +124,7 @@ export const INITIAL_PRODUCTS: Product[] = [
+     id: 'prod-10',
+     code: 'TH-TEA-001',
+     name: 'Trà tự nhiên TH true TEA Ô Long tự nhiên 350ml',
+-    category: 'Trà tự nhiên TH true TEA',
++    category: 'TRA',
+     unit: 'Chai 350ml',
+     sellingPrice: 11000,
+     costPrice: 7500,
+@@ -218,52 +218,6 @@ export const INITIAL_BATCHES: Batch[] = [
+   }
+ ];
+ 
+-export const INITIAL_CUSTOMERS: Customer[] = [
+-  {
+-    id: 'cust-01',
+-    code: 'KH-0001',
+-    name: 'Nguyễn Thị Mai Lan',
+-    phone: '0987654321',
+-    email: 'mailan.nguyen@gmail.com',
+-    points: 420,
+-    tier: 'Gold',
+-    createdAt: '2025-01-15',
+-    totalSpent: 4200000
+-  },
+-  {
+-    id: 'cust-02',
+-    code: 'KH-0002',
+-    name: 'Trần Văn Hưng',
+-    phone: '0912345678',
+-    email: 'hung.tran@gmail.com',
+-    points: 150,
+-    tier: 'Silver',
+-    createdAt: '2025-03-20',
+-    totalSpent: 1500000
+-  },
+-  {
+-    id: 'cust-03',
+-    code: 'KH-0003',
+-    name: 'Lê Hoàng Yến',
+-    phone: '0909888999',
+-    email: 'hoangyen.le@outlook.com',
+-    points: 850,
+-    tier: 'Diamond',
+-    createdAt: '2024-11-10',
+-    totalSpent: 8500000
+-  },
+-  {
+-    id: 'cust-04',
+-    code: 'KH-0004',
+-    name: 'Phạm Đức Minh',
+-    phone: '0933112233',
+-    points: 60,
+-    tier: 'Standard',
+-    createdAt: '2026-08-05',
+-    totalSpent: 600000
+-  }
+-];
+-
+ export const INITIAL_STAFF: Staff[] = [
+   {
+     id: 'staff-01',
+@@ -272,9 +226,9 @@ export const INITIAL_STAFF: Staff[] = [
+     phone: '0978111222',
+     email: 'danghoangphuc2006@gmail.com',
+     username: 'admin',
+-    role: 'admin',
++    role: 'manager',
+     status: 'active',
+-    shift: 'Hành chính'
++    shift: 'HANH_CHINH'
+   },
+   {
+     id: 'staff-02',
+@@ -285,7 +239,7 @@ export const INITIAL_STAFF: Staff[] = [
+     username: 'thutrang',
+     role: 'manager',
+     status: 'active',
+-    shift: 'Sáng (06:00 - 14:00)'
++    shift: 'SANG'
+   },
+   {
+     id: 'staff-03',
+@@ -296,7 +250,7 @@ export const INITIAL_STAFF: Staff[] = [
+     username: 'tuannv',
+     role: 'cashier',
+     status: 'active',
+-    shift: 'Chiều (14:00 - 22:00)'
++    shift: 'CHIEU'
+   },
+   {
+     id: 'staff-04',
+@@ -307,7 +261,7 @@ export const INITIAL_STAFF: Staff[] = [
+     username: 'baohq',
+     role: 'warehouse',
+     status: 'active',
+-    shift: 'Sáng (06:00 - 14:00)'
++    shift: 'SANG'
+   }
+ ];
+ 
+@@ -316,23 +270,29 @@ export const INITIAL_PROMOTIONS: Promotion[] = [
+     id: 'promo-01',
+     code: 'THSUMMER10',
+     name: 'Mùa Hè Tươi Sạch Giảm 10% Sữa Chua',
++    scope: 'category',
+     discountType: 'percentage',
+     value: 10,
+     startDate: '2026-09-01',
+     endDate: '2026-09-30',
+     minOrderValue: 100000,
+-    applicableCategory: 'Sữa chua ăn & uống',
++    applicableCategory: 'SUA_CHUA',
++    requiresCode: false,
++    usedCount: 0,
+     status: 'active'
+   },
+   {
+     id: 'promo-02',
+     code: 'THVIP20K',
+     name: 'Ưu đãi hóa đơn từ 200k giảm 20.000đ',
++    scope: 'order',
+     discountType: 'fixed_amount',
+     value: 20000,
+     startDate: '2026-09-15',
+     endDate: '2026-10-15',
+     minOrderValue: 200000,
++    requiresCode: true,
++    usedCount: 1,
+     status: 'active'
+   }
+ ];
+@@ -380,9 +340,6 @@ export const INITIAL_INVOICES: Invoice[] = [
+     createdAt: '2026-09-21 08:35:12',
+     cashierId: 'staff-03',
+     cashierName: 'Nguyễn Văn Tuấn',
+-    customerId: 'cust-01',
+-    customerName: 'Nguyễn Thị Mai Lan',
+-    customerPhone: '0987654321',
+     items: [
+       {
+         productId: 'prod-01',
+@@ -409,12 +366,22 @@ export const INITIAL_INVOICES: Invoice[] = [
+     ],
+     subtotal: 172000,
+     discountAmount: 13400,
+-    pointsUsed: 0,
+-    pointsEarned: 15,
+     finalTotal: 158600,
+     paymentMethod: 'transfer',
++    payments: [
++      {
++        id: 'pay-01',
++        method: 'transfer',
++        amount: 158600,
++        status: 'confirmed',
++        reference: 'VCB-FT26092108351',
++        confirmedById: 'staff-03',
++        confirmedAt: '2026-09-21 08:36:00'
++      }
++    ],
+     receivedAmount: 158600,
+     changeAmount: 0,
++    paidAt: '2026-09-21 08:36:00',
+     status: 'completed',
+     notes: 'Khách hàng thanh toán qua VietQR Vietcombank'
+   },
+@@ -424,9 +391,6 @@ export const INITIAL_INVOICES: Invoice[] = [
+     createdAt: '2026-09-21 09:12:40',
+     cashierId: 'staff-03',
+     cashierName: 'Nguyễn Văn Tuấn',
+-    customerId: 'cust-03',
+-    customerName: 'Lê Hoàng Yến',
+-    customerPhone: '0909888999',
+     items: [
+       {
+         productId: 'prod-02',
+@@ -454,12 +418,21 @@ export const INITIAL_INVOICES: Invoice[] = [
+     subtotal: 591000,
+     discountAmount: 20000,
+     voucherCode: 'THVIP20K',
+-    pointsUsed: 50, // 50 điểm = 50.000đ
+-    pointsEarned: 52,
+-    finalTotal: 521000,
++    finalTotal: 571000,
+     paymentMethod: 'cash',
++    payments: [
++      {
++        id: 'pay-02',
++        method: 'cash',
++        amount: 571000,
++        status: 'confirmed',
++        confirmedById: 'staff-03',
++        confirmedAt: '2026-09-21 09:13:00'
++      }
++    ],
+     receivedAmount: 600000,
+-    changeAmount: 79000,
++    changeAmount: 29000,
++    paidAt: '2026-09-21 09:13:00',
+     status: 'completed'
+   }
+ ];
+diff --git a/frontend/src/lib/labels.ts b/frontend/src/lib/labels.ts
+new file mode 100644
+index 0000000..e719658
+--- /dev/null
++++ b/frontend/src/lib/labels.ts
+@@ -0,0 +1,69 @@
++// Ánh xạ giá trị ENUM của database (init.sql) <-> nhãn tiếng Việt hiển thị trên giao diện.
++// Database luôn lưu/nhận MÃ ENUM; giao diện chỉ dùng nhãn khi hiển thị.
++import type {
++  Category, Shift, StaffRole, PaymentMethod, InvoiceStatus,
++  PromotionStatus, PromotionScope, PurchaseOrderStatus,
++} from '../types';
++
++export const CATEGORY_LABELS: Record<Category, string> = {
++  SUA_TUOI_TIET_TRUNG: 'Sữa tươi tiệt trùng',
++  SUA_TUOI_THANH_TRUNG: 'Sữa tươi thanh trùng',
++  SUA_CHUA: 'Sữa chua ăn & uống',
++  BO_PHOMAI: 'Bơ & Phô mai tự nhiên',
++  KEM: 'Kem TH true ICE CREAM',
++  NUOC: 'Nước tinh khiết & Nước trái cây',
++  TRA: 'Trà tự nhiên TH true TEA',
++};
++export const CATEGORY_LIST = Object.keys(CATEGORY_LABELS) as Category[];
++
++export const SHIFT_LABELS: Record<Shift, string> = {
++  SANG: 'Sáng (06:00 - 14:00)',
++  CHIEU: 'Chiều (14:00 - 22:00)',
++  HANH_CHINH: 'Hành chính',
++};
++export const SHIFT_LIST = Object.keys(SHIFT_LABELS) as Shift[];
++
++export const ROLE_LABELS: Record<StaffRole, string> = {
++  manager: 'Quản lý',
++  cashier: 'Thu ngân',
++  warehouse: 'Thủ kho',
++};
++
++export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
++  cash: 'Tiền mặt',
++  transfer: 'Chuyển khoản',
++  card: 'Thẻ',
++  mixed: 'Nhiều hình thức',
++};
++
++export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {
++  completed: 'Đã hoàn tất',
++  pending_payment: 'Chờ thanh toán',
++  pending_approval: 'Chờ quản lý duyệt',
++  returned: 'Đã đổi trả',
++  cancelled: 'Đã hủy',
++};
++
++export const PROMOTION_STATUS_LABELS: Record<PromotionStatus, string> = {
++  draft: 'Nháp',
++  scheduled: 'Chờ áp dụng',
++  active: 'Đang chạy',
++  paused: 'Tạm dừng',
++  expired: 'Hết hạn',
++};
++
++export const PROMOTION_SCOPE_LABELS: Record<PromotionScope, string> = {
++  order: 'Cả hóa đơn',
++  category: 'Theo nhóm hàng',
++  product: 'Sản phẩm chỉ định',
++  near_expiry: 'Lô sắp hết hạn (xả hàng)',
++};
++
++export const PURCHASE_STATUS_LABELS: Record<PurchaseOrderStatus, string> = {
++  pending: 'Chờ nhận hàng',
++  received: 'Đã nhận',
++  cancelled: 'Đã hủy',
++};
++
++// Prisma trả DECIMAL dưới dạng chuỗi ("25000.00") -> ép về số trước khi tính toán
++export const toNum = (v: unknown): number => (v === null || v === undefined ? 0 : Number(v));
+diff --git a/frontend/src/types/index.ts b/frontend/src/types/index.ts
+index b0ad1dc..ab4b236 100644
+--- a/frontend/src/types/index.ts
++++ b/frontend/src/types/index.ts
+@@ -1,11 +1,31 @@
+-export type Category = 
+-  | 'Sữa tươi tiệt trùng'
+-  | 'Sữa tươi thanh trùng'
+-  | 'Sữa chua ăn & uống'
+-  | 'Bơ & Phô mai tự nhiên'
+-  | 'Kem TH true ICE CREAM'
+-  | 'Nước tinh khiết & Nước trái cây'
+-  | 'Trà tự nhiên TH true TEA';
++// Kiểu dữ liệu khớp với database (init.sql). Giá trị ENUM dùng đúng mã trong DB;
++// nhãn tiếng Việt nằm ở src/lib/labels.ts.
++
++export type Category =
++  | 'SUA_TUOI_TIET_TRUNG'
++  | 'SUA_TUOI_THANH_TRUNG'
++  | 'SUA_CHUA'
++  | 'BO_PHOMAI'
++  | 'KEM'
++  | 'NUOC'
++  | 'TRA';
++
++export type ProductStatus = 'active' | 'discontinued';
++export type BatchStatus = 'good' | 'expiring_soon' | 'expired';
++// 'mixed' chỉ dùng ở Invoice.paymentMethod; từng khoản trong InvoicePayment là cash | transfer | card
++export type PaymentMethod = 'cash' | 'transfer' | 'card' | 'mixed';
++export type PaymentStatus = 'pending' | 'confirmed' | 'failed';
++export type InvoiceStatus = 'completed' | 'pending_payment' | 'returned' | 'cancelled' | 'pending_approval';
++export type CashSessionStatus = 'open' | 'closed' | 'reviewed';
++export type StaffRole = 'manager' | 'cashier' | 'warehouse';
++export type StaffStatus = 'active' | 'inactive';
++export type Shift = 'SANG' | 'CHIEU' | 'HANH_CHINH';
++export type DiscountType = 'percentage' | 'fixed_amount';
++export type PromotionStatus = 'draft' | 'scheduled' | 'active' | 'paused' | 'expired';
++export type PromotionScope = 'order' | 'category' | 'product' | 'near_expiry';
++export type SupplierStatus = 'active' | 'inactive';
++export type PurchaseOrderStatus = 'pending' | 'received' | 'cancelled';
++export type StockAuditStatus = 'draft' | 'pending_approval' | 'approved' | 'rejected';
+ 
+ export interface Batch {
+   id: string;
+@@ -15,7 +35,8 @@ export interface Batch {
+   expiryDate: string; // YYYY-MM-DD
+   quantity: number;
+   importPrice: number;
+-  status: 'good' | 'expiring_soon' | 'expired'; // expiring_soon <= 30 days
++  status: BatchStatus; // expiring_soon <= 30 days
++  receivedById?: string; // staff.id người nhập kho
+ }
+ 
+ export interface Product {
+@@ -30,7 +51,7 @@ export interface Product {
+   minStockLevel: number;
+   description: string;
+   imageUrl?: string;
+-  status: 'active' | 'discontinued';
++  status: ProductStatus;
+   discountPercent?: number;
+ }
+ 
+@@ -47,6 +68,7 @@ export interface InvoiceItem {
+   productId: string;
+   productCode: string;
+   productName: string;
++  batchId?: string;
+   batchCode: string;
+   unit: string;
+   quantity: number;
+@@ -55,39 +77,65 @@ export interface InvoiceItem {
+   subtotal: number;
+ }
+ 
++// Bảng invoice_payments: từng khoản thanh toán của hóa đơn
++export interface InvoicePayment {
++  id: string;
++  method: Exclude<PaymentMethod, 'mixed'>;
++  amount: number; // số tiền tính vào hóa đơn (đã trừ tiền thối)
++  status: PaymentStatus;
++  reference?: string; // mã giao dịch chuyển khoản / chuẩn chi thẻ
++  confirmedById?: string;
++  confirmedAt?: string;
++}
++
++// Bảng invoice_approvals: lưu vết quản lý duyệt đổi trả/hủy + hoàn tiền
++export interface InvoiceApproval {
++  id: string;
++  action: 'return' | 'cancel';
++  reason: string;
++  refundAmount: number;
++  refundMethod?: PaymentMethod;
++  refundRef?: string;
++  approvedById: string;
++  createdAt: string;
++}
++
+ export interface Invoice {
+   id: string;
+   code: string; // e.g. HD-20260921-001
+   createdAt: string;
+   cashierId: string;
+   cashierName: string;
+-  customerId?: string;
+-  customerName?: string;
+-  customerPhone?: string;
++  cashSessionId?: string;
+   items: InvoiceItem[];
+   subtotal: number;
+   discountAmount: number;
+   voucherCode?: string;
+-  pointsUsed: number;
+-  pointsEarned: number;
+   finalTotal: number;
+-  paymentMethod: 'cash' | 'transfer' | 'card';
+-  receivedAmount: number;
+-  changeAmount: number;
+-  status: 'completed' | 'returned' | 'cancelled';
++  paymentMethod: PaymentMethod;
++  payments: InvoicePayment[];
++  receivedAmount: number; // tổng tiền khách đưa (gồm cả tiền thừa)
++  changeAmount: number; // tiền thối (chỉ phát sinh với tiền mặt)
++  paidAt?: string; // thời điểm thanh toán đủ; undefined = chưa xong
++  status: InvoiceStatus;
+   notes?: string;
++  approvals?: InvoiceApproval[];
+ }
+ 
+-export interface Customer {
++// Bảng cash_sessions: ca thu ngân
++export interface CashSession {
+   id: string;
+-  code: string; // e.g. KH001
+-  name: string;
+-  phone: string;
+-  email?: string;
+-  points: number;
+-  tier: 'Standard' | 'Silver' | 'Gold' | 'Diamond';
+-  createdAt: string;
+-  totalSpent: number;
++  code: string;
++  cashierId: string;
++  openedAt: string;
++  openingCash: number;
++  closedAt?: string;
++  expectedCash?: number; // openingCash + tiền mặt thu - tiền mặt hoàn
++  countedCash?: number;
++  difference?: number; // countedCash - expectedCash
++  differenceReason?: string;
++  reviewedById?: string;
++  status: CashSessionStatus;
+ }
+ 
+ export interface Staff {
+@@ -97,22 +145,32 @@ export interface Staff {
+   phone: string;
+   email: string;
+   username: string;
+-  role: 'admin' | 'manager' | 'cashier' | 'warehouse';
+-  status: 'active' | 'inactive';
+-  shift: 'Sáng (06:00 - 14:00)' | 'Chiều (14:00 - 22:00)' | 'Hành chính';
++  password?: string; // chỉ dùng lúc tạo mới để gửi lên API (server băm bcrypt), không lưu lại ở client
++  role: StaffRole;
++  status: StaffStatus;
++  shift: Shift;
++  mustChangePassword?: boolean;
+ }
+ 
+ export interface Promotion {
+   id: string;
+-  code: string;
++  code: string; // mã chương trình / mã voucher
+   name: string;
+-  discountType: 'percentage' | 'fixed_amount';
++  description?: string;
++  scope: PromotionScope;
++  discountType: DiscountType;
+   value: number;
++  maxDiscountAmount?: number; // trần giảm khi giảm theo %
+   startDate: string;
+   endDate: string;
+   minOrderValue: number;
+-  applicableCategory?: string;
+-  status: 'active' | 'expired' | 'scheduled';
++  applicableCategory?: Category; // dùng khi scope = 'category'
++  nearExpiryDays?: number; // dùng khi scope = 'near_expiry'
++  productIds?: string[]; // bảng promotion_products, dùng khi scope = 'product'
++  requiresCode: boolean; // true: phải nhập mã; false: tự động áp dụng
++  usageLimit?: number;
++  usedCount: number;
++  status: PromotionStatus;
+ }
+ 
+ export interface Supplier {
+@@ -124,7 +182,7 @@ export interface Supplier {
+   email: string;
+   address: string;
+   categoryProvided: string;
+-  status: 'active' | 'inactive';
++  status: SupplierStatus;
+ }
+ 
+ export interface PurchaseOrder {
+@@ -142,11 +200,12 @@ export interface PurchaseOrder {
+     subtotal: number;
+   }[];
+   totalAmount: number;
+-  status: 'pending' | 'received' | 'cancelled';
++  status: PurchaseOrderStatus;
+   notes?: string;
+ }
+ 
+ export interface StockAuditItem {
++  batchId?: string; // giao diện kiểm kê theo lô; server sẽ gộp theo productId khi lưu stock_audit_items
+   productId: string;
+   productName: string;
+   systemQuantity: number;
+@@ -154,3 +213,14 @@ export interface StockAuditItem {
+   difference: number;
+   reason: string;
+ }
++
++// Bảng stock_audits: phiếu kiểm kê, có bước quản lý duyệt
++export interface StockAudit {
++  id: string;
++  auditCode: string;
++  auditDate: string;
++  performedById: string;
++  approvedById?: string;
++  status: StockAuditStatus;
++  items: StockAuditItem[];
++}
