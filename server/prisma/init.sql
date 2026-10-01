@@ -1,3 +1,5 @@
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
 -- Bật hàm sinh UUID phía database (dùng làm giá trị mặc định cho cột id)
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 

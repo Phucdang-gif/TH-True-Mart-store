@@ -13,7 +13,7 @@ INSERT INTO "products" (
   "imageUrl"
 ) VALUES 
 (
-  'TH-MILK-180', 
+  'TH-MILK-DAU-180ML', 
   'Sữa tươi tiệt trùng TH true MILK Dâu 180ml', 
   'SUA_TUOI_TIET_TRUNG', 
   'Lốc 4 hộp', 
@@ -21,7 +21,7 @@ INSERT INTO "products" (
   30000, 
   20, 
   'Sữa tươi tiệt trùng hương dâu hoàn toàn từ thiên nhiên',
-  'server\public\uploads\products\TH-MILK-DAU-180ML.webp'
+  '/uploads/products/TH-MILK-DAU-180ML.webp'
 ),
 (
   'TH-FRESH-1L', 
@@ -32,7 +32,7 @@ INSERT INTO "products" (
   36000, 
   10, 
   'Sữa tươi thanh trùng giữ trọn vị ngon, bảo quản lạnh',
-  'server\public\uploads\products\TH-FRESH-1L.webp'
+  '/uploads/products/TH-FRESH-1L.webp'
 ),
 (
   'TH-YOGURT-ALOE', 
@@ -43,7 +43,7 @@ INSERT INTO "products" (
   22000, 
   30, 
   'Sữa chua lên men tự nhiên kết hợp nha đam giòn',
-  'server\public\uploads\products\TH-YOGURT-ALOE.webp'
+  '/uploads/products/TH-YOGURT-ALOE.webp'
 ),
 (
   'TH-JUICE-ORANGE', 
@@ -54,7 +54,7 @@ INSERT INTO "products" (
   15000, 
   50, 
   'Nước trái cây ép lạnh, không thêm đường',
-  'server\public\uploads\products\TH-JUICE-ORANGE.webp'
+  '/uploads/products/TH-JUICE-ORANGE.webp'
 ),
 (
   'TH-ICECREAM-SOCOLA', 
@@ -65,5 +65,5 @@ INSERT INTO "products" (
   18000, 
   15, 
   'Kem trà xanh tự nhiên mát lạnh',
-  'server\public\uploads\products\TH-ICECREAM-SOCOLA.webp'
+  '/uploads/products/TH-ICECREAM-SOCOLA.webp'
 );

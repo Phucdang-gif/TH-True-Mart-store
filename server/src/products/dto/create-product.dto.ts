@@ -1,41 +1,42 @@
-import{
-    IsString, 
-  IsNotEmpty, 
-  IsNumber, 
-  IsOptional, 
-  IsInt, 
-  IsEnum, 
-  IsUrl, 
-  Min
-
-}from 'class-validator';
-import {Category , ProductStatus} from '@prisma/client';
+import { IsString, IsNotEmpty, IsNumber, IsOptional, Min, IsEnum } from 'class-validator';
+import { Category, ProductStatus } from '@prisma/client'; 
 
 export class CreateProductDto {
-    @IsString()
-  @IsNotEmpty({ message: 'Mã sản phẩm (code) không được để trống' })
+  @IsString()
+  @IsNotEmpty()
   code: string;
 
   @IsString()
-  @IsNotEmpty({ message: 'Tên sản phẩm (name) không được để trống' })
+  @IsNotEmpty()
   name: string;
 
-  @IsEnum(Category, { message: 'Danh mục (category) không hợp lệ' })
-  @IsNotEmpty({ message: 'Danh mục (category) không được để trống' })
+  @IsEnum(Category)
+  @IsNotEmpty()
   category: Category;
 
   @IsString()
-  @IsNotEmpty({ message: 'Đơn vị tính (unit) không được để trống' })
+  @IsNotEmpty()
   unit: string;
 
   @IsNumber()
-  @IsNotEmpty({ message: 'Giá bán (sellingPrice) không được để trống' })
-  @Min(0, { message: 'Giá bán phải lớn hơn hoặc bằng 0' })
+  @Min(0)
   sellingPrice: number;
 
   @IsNumber()
-  @IsNotEmpty({ message: 'Giá vốn (costPrice) không được để trống' })
-  @Min(0, { message: 'Giá vốn phải lớn hơn hoặc bằng 0' })
+  @Min(0)
   costPrice: number;
 
+  // --- 3 TRƯỜNG CẦN THÊM VÀO ---
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  minStockLevel?: number;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsEnum(ProductStatus)
+  status?: ProductStatus;
 }

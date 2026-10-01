@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { fetchApi } from "../../lib/api";
 import {
   Package,
   Tag,
@@ -101,27 +102,20 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
   // Code mới gọi API PATCH /api/products/:id
   const saveEditPrice = async (productId: string) => {
     try {
-      const response = await fetch(
-        `http://localhost:3001/api/products/${productId}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sellingPrice: editSellingPrice,
-            costPrice: editCostPrice,
-          }),
-        },
-      );
+      await fetchApi(`/api/products/${productId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          sellingPrice: editSellingPrice,
+          costPrice: editCostPrice,
+        }),
+      });
 
-      if (response.ok) {
-        // Nếu Backend báo thành công, mới tiến hành cập nhật giao diện
-        onUpdateProductPrice(productId, editSellingPrice, editCostPrice);
-        setEditingId(null);
-      } else {
-        alert("Lỗi khi cập nhật giá trên hệ thống!");
-      }
+      // Nếu Backend báo thành công, mới tiến hành cập nhật giao diện
+      onUpdateProductPrice(productId, editSellingPrice, editCostPrice);
+      setEditingId(null);
     } catch (error) {
       console.error("Lỗi cập nhật giá:", error);
+      alert((error as Error).message || "Lỗi khi cập nhật giá trên hệ thống!");
     }
   };
 
@@ -133,9 +127,8 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
     }
 
     try {
-      const response = await fetch("http://localhost:3001/api/products", {
+      const savedProduct = await fetchApi<Product>("/api/products", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           code: newProd.code || "TH-CUSTOM",
           name: newProd.name,
@@ -149,18 +142,12 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
         }),
       });
 
-      if (response.ok) {
-        const savedProduct = await response.json();
-        // Gọi hàm từ props để cập nhật lại danh sách trên UI (App.tsx)
-        onAddProduct(savedProduct);
-        setShowAddModal(false);
-      } else {
-        // Bắt lỗi Validation từ Backend (VD: Trùng mã Code/Barcode)
-        const errorData = await response.json();
-        alert(`Lỗi: ${errorData.message}`);
-      }
+      // Gọi hàm từ props để cập nhật lại danh sách trên UI (App.tsx)
+      onAddProduct(savedProduct);
+      setShowAddModal(false);
     } catch (error) {
       console.error("Lỗi thêm sản phẩm:", error);
+      alert(`Lỗi: ${(error as Error).message}`);
     }
   };
 
