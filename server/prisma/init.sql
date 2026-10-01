@@ -1,15 +1,3 @@
--- =============================================================================
--- TH TRUE MART - SCRIPT KHỞI TẠO DATABASE (PostgreSQL) - BẢN HOÀN CHỈNH
--- Đã gộp sẵn phần đăng nhập & phân quyền (RBAC) - chức năng 5.1.
--- Đã BỎ tích điểm/đổi điểm và module khách hàng thành viên; tăng cường quy trình THANH TOÁN (thanh toán nhiều hình thức,
--- xác nhận chuyển khoản, ca thu ngân/kết ca, hoàn tiền khi đổi trả).
--- Chạy trực tiếp bằng psql hoặc pgAdmin, KHÔNG cần cài Prisma CLI.
---
--- Cách chạy:
---   psql -U postgres -d th_true_mart -f init.sql
--- (nếu database th_true_mart chưa tồn tại, tạo trước bằng: CREATE DATABASE th_true_mart;)
--- =============================================================================
-
 -- Bật hàm sinh UUID phía database (dùng làm giá trị mặc định cho cột id)
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -79,7 +67,6 @@ CREATE TABLE "staff" (
   "code"               TEXT NOT NULL UNIQUE,
   "name"               TEXT NOT NULL,
   "phone"              TEXT NOT NULL,
-  "email"              TEXT NOT NULL UNIQUE,
   "username"           TEXT NOT NULL UNIQUE,
   "password"           TEXT NOT NULL,             -- lưu bcrypt hash, KHÔNG lưu plaintext
   "role"               "StaffRole" NOT NULL,      -- giữ để tương thích seed.sql; roleId được đồng bộ tự động
@@ -216,12 +203,10 @@ CREATE TABLE "products" (
   "unit"            TEXT NOT NULL,
   "sellingPrice"    DECIMAL(12,2) NOT NULL,
   "costPrice"       DECIMAL(12,2) NOT NULL,
-  "barcode"         TEXT NOT NULL UNIQUE,
   "minStockLevel"   INTEGER NOT NULL DEFAULT 0,
   "description"     TEXT,
   "imageUrl"        TEXT,
   "status"          "ProductStatus" NOT NULL DEFAULT 'active',
-  "discountPercent" DECIMAL(5,2),
   "createdAt"       TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt"       TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -397,7 +382,6 @@ CREATE TABLE "suppliers" (
   "name"             TEXT NOT NULL,
   "contactPerson"    TEXT NOT NULL,
   "phone"            TEXT NOT NULL,
-  "email"            TEXT NOT NULL,
   "address"          TEXT NOT NULL,
   "categoryProvided" TEXT NOT NULL,
   "status"           "SupplierStatus" NOT NULL DEFAULT 'active'

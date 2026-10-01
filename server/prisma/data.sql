@@ -8,9 +8,9 @@ INSERT INTO "products" (
   "unit", 
   "sellingPrice", 
   "costPrice", 
-  "barcode", 
   "minStockLevel", 
-  "description"
+  "description",
+  "imageUrl"
 ) VALUES 
 (
   'TH-MILK-180', 
@@ -19,9 +19,9 @@ INSERT INTO "products" (
   'Lốc 4 hộp', 
   38000, 
   30000, 
-  '8936036012345', 
   20, 
-  'Sữa tươi tiệt trùng hương dâu hoàn toàn từ thiên nhiên'
+  'Sữa tươi tiệt trùng hương dâu hoàn toàn từ thiên nhiên',
+  'server\public\uploads\products\TH-MILK-DAU-180ML.webp'
 ),
 (
   'TH-FRESH-1L', 
@@ -30,9 +30,9 @@ INSERT INTO "products" (
   'Hộp', 
   45000, 
   36000, 
-  '8936036054321', 
   10, 
-  'Sữa tươi thanh trùng giữ trọn vị ngon, bảo quản lạnh'
+  'Sữa tươi thanh trùng giữ trọn vị ngon, bảo quản lạnh',
+  'server\public\uploads\products\TH-FRESH-1L.webp'
 ),
 (
   'TH-YOGURT-ALOE', 
@@ -41,9 +41,9 @@ INSERT INTO "products" (
   'Lốc 4 hộp', 
   28000, 
   22000, 
-  '8936036098765', 
   30, 
-  'Sữa chua lên men tự nhiên kết hợp nha đam giòn'
+  'Sữa chua lên men tự nhiên kết hợp nha đam giòn',
+  'server\public\uploads\products\TH-YOGURT-ALOE.webp'
 ),
 (
   'TH-JUICE-ORANGE', 
@@ -52,18 +52,18 @@ INSERT INTO "products" (
   'Chai', 
   20000, 
   15000, 
-  '8936036033333', 
   50, 
-  'Nước trái cây ép lạnh, không thêm đường'
+  'Nước trái cây ép lạnh, không thêm đường',
+  'server\public\uploads\products\TH-JUICE-ORANGE.webp'
 ),
 (
-  'TH-ICECREAM-MATCHA', 
-  'Kem que TH true ICE CREAM Trà xanh Matcha', 
+  'TH-ICECREAM-SOCOLA', 
+  'Kem que TH true ICE CREAM SOCOLA 52g',
   'KEM', 
   'Que', 
   25000, 
   18000, 
-  '8936036077777', 
   15, 
-  'Kem trà xanh tự nhiên mát lạnh'
+  'Kem trà xanh tự nhiên mát lạnh',
+  'server\public\uploads\products\TH-ICECREAM-SOCOLA.webp'
 );
