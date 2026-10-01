@@ -11,8 +11,7 @@ export class ProductsService {
     const existingProduct = await this.prisma.products.findFirst({
       where:{
         OR:[
-          {code: createProductDto.code},
-          {barcode: createProductDto.barcode}
+          {code: createProductDto.code}
         ]
       }
     });

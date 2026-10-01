@@ -38,7 +38,4 @@ export class CreateProductDto {
   @Min(0, { message: 'Giá vốn phải lớn hơn hoặc bằng 0' })
   costPrice: number;
 
-  @IsString()
-  @IsNotEmpty({ message: 'Mã vạch (barcode) không được để trống' })
-  barcode: string;
 }
