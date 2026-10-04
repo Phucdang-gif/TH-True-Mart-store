@@ -179,7 +179,6 @@ export interface Supplier {
   name: string;
   contactPerson: string;
   phone: string;
-  email: string;
   address: string;
   categoryProvided: string;
   status: SupplierStatus;

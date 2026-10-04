@@ -32,7 +32,6 @@ export default function App() {
 
   // Application Data States
   const [products, setProducts] = useState<Product[]>([]);
-
   useEffect(() => {
     const fetchProducts = async () => {
       try {
@@ -60,9 +59,35 @@ export default function App() {
 
     fetchProducts();
   }, []);
+
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  useEffect(() => {
+    // Lấy danh sách Nhà cung cấp
+    const fetchSuppliers = async () => {
+      try {
+        const res = await fetch("http://localhost:3001/api/suppliers");
+        if (res.ok) setSuppliers(await res.json());
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    // Lấy danh sách Đơn hàng PO
+    const fetchPO = async () => {
+      try {
+        const res = await fetch("http://localhost:3001/api/purchase-orders");
+        if (res.ok) setPurchaseOrders(await res.json());
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    fetchSuppliers();
+    fetchPO();
+  }, []);
+
   const [batches, setBatches] = useState<Batch[]>(INITIAL_BATCHES);
   const [staffList, setStaffList] = useState<Staff[]>(INITIAL_STAFF);
-  const [suppliers, setSuppliers] = useState<Supplier[]>(INITIAL_SUPPLIERS);
   const [promotions, setPromotions] = useState<Promotion[]>(INITIAL_PROMOTIONS);
   const [invoices, setInvoices] = useState<Invoice[]>(INITIAL_INVOICES);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>(
@@ -252,6 +277,16 @@ export default function App() {
     setSuppliers((prev) => [...prev, newSup]);
   };
 
+  const handleUpdateSupplier = (updatedSup: Supplier) => {
+    setSuppliers((prev) =>
+      prev.map((s) => (s.id === updatedSup.id ? updatedSup : s)),
+    );
+  };
+
+  const handleDeleteSupplier = (supplierId: string) => {
+    setSuppliers((prev) => prev.filter((s) => s.id !== supplierId));
+  };
+
   const handleCreatePurchaseOrder = (newPO: PurchaseOrder) => {
     setPurchaseOrders((prev) => [newPO, ...prev]);
   };
@@ -318,6 +353,8 @@ export default function App() {
               products={products}
               purchaseOrders={purchaseOrders}
               onAddSupplier={handleAddSupplier}
+              onUpdateSupplier={handleUpdateSupplier}
+              onDeleteSupplier={handleDeleteSupplier}
               onCreatePurchaseOrder={handleCreatePurchaseOrder}
             />
           )}
