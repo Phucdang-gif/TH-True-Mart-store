@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState } from "react";
 import { Navbar } from "./components/Navbar";
 import { BanHangPOS } from "./components/pos/BanHangPOS";
 import { QuanLyHangHoa } from "./components/products/QuanLyHangHoa";
@@ -14,7 +14,6 @@ import {
   INITIAL_PURCHASE_ORDERS,
 } from "./data/initialData";
 import {
-  Product,
   Batch,
   Staff,
   Promotion,
@@ -23,42 +22,18 @@ import {
   PurchaseOrder,
   StockAudit,
 } from "./types";
-import { toNum } from "./lib/labels";
 import { useSuppliers } from "./hooks/useSuppliers";
+import { useProducts } from "./hooks/useProducts";
+
 export default function App() {
   const [activeModule, setActiveModule] = useState<number>(1); // 1 to 6
+
+  // ===== Dữ liệu đã nối API: state + gọi API nằm trong hook =====
   const { suppliers, addSupplier, updateSupplier, removeSupplier } =
     useSuppliers();
-  // Application Data States
-  const [products, setProducts] = useState<Product[]>([]);
-  useEffect(() => {
-    const fetchProducts = async () => {
-      try {
-        const response = await fetch("http://localhost:3001/api/products");
-        if (response.ok) {
-          const data = await response.json();
-          console.log("Dữ liệu từ API:", data);
-          // Prisma trả DECIMAL dạng chuỗi -> ép về số để tính toán
-          setProducts(
-            data.map((p: any) => ({
-              ...p,
-              sellingPrice: toNum(p.sellingPrice),
-              costPrice: toNum(p.costPrice),
-              discountPercent:
-                p.discountPercent == null
-                  ? undefined
-                  : toNum(p.discountPercent),
-            })),
-          );
-        }
-      } catch (error) {
-        console.error("Lỗi khi kết nối Database:", error);
-      }
-    };
+  const { products, addProduct, updateProductPrice } = useProducts();
 
-    fetchProducts();
-  }, []);
-
+  // ===== Dữ liệu tạm (dữ liệu giả, sẽ nối API ở các module sau) =====
   const [batches, setBatches] = useState<Batch[]>(INITIAL_BATCHES);
   const [staffList, setStaffList] = useState<Staff[]>(INITIAL_STAFF);
   const [promotions, setPromotions] = useState<Promotion[]>(INITIAL_PROMOTIONS);
@@ -167,25 +142,7 @@ export default function App() {
   const handleCancelInvoice = (invoiceId: string, input: ApprovalInput) =>
     applyApproval(invoiceId, "cancel", input);
 
-  // 2. Product management handlers
-  const handleUpdateProductPrice = (
-    productId: string,
-    newSellingPrice: number,
-    newCostPrice: number,
-  ) => {
-    setProducts((prev) =>
-      prev.map((p) =>
-        p.id === productId
-          ? { ...p, sellingPrice: newSellingPrice, costPrice: newCostPrice }
-          : p,
-      ),
-    );
-  };
-
-  const handleAddProduct = (newProd: Product) => {
-    setProducts((prev) => [...prev, newProd]);
-  };
-
+  // 2. Promotion handler (TODO: nối API khi làm module khuyến mãi)
   const handleAddPromotion = (newPromo: Promotion) => {
     setPromotions((prev) => [...prev, newPromo]);
   };
@@ -278,8 +235,8 @@ export default function App() {
             <QuanLyHangHoa
               products={products}
               promotions={promotions}
-              onUpdateProductPrice={handleUpdateProductPrice}
-              onAddProduct={handleAddProduct}
+              onUpdateProductPrice={updateProductPrice}
+              onAddProduct={addProduct}
               onAddPromotion={handleAddPromotion}
             />
           )}

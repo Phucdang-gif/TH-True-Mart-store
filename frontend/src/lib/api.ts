@@ -34,5 +34,12 @@ export async function fetchApi<T>(
     return {} as T;
   }
   const text = await response.text();
-return (text ? JSON.parse(text) : {}) as T;
+  return (text ? JSON.parse(text) : {}) as T;
+}
+
+/**
+ * Ghép URL đầy đủ cho file tĩnh do backend phục vụ (VD: ảnh sản phẩm /uploads/abc.png)
+ */
+export function assetUrl(path: string): string {
+  return `${API_URL}${path}`;
 }

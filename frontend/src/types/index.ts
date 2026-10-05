@@ -1,5 +1,9 @@
-// Kiểu dữ liệu khớp với database (init.sql). Giá trị ENUM dùng đúng mã trong DB;
+// Kiểu dữ liệu khớp với database (schema.prisma). Giá trị ENUM dùng đúng mã trong DB;
 // nhãn tiếng Việt nằm ở src/lib/labels.ts.
+//
+// Lưu ý khi nối API (JSON từ backend):
+//  - Cột DECIMAL (giá, tiền...) về dạng CHUỖI ("38000.00") -> phải ép số trong services/ (xem toNum).
+//  - Cột DateTime về dạng ISO ("2026-10-01T00:00:00.000Z") -> lấy slice(0, 10) khi cần "YYYY-MM-DD".
 
 export type Category =
   | 'SUA_TUOI_TIET_TRUNG'
@@ -29,9 +33,10 @@ export type StockAuditStatus = 'draft' | 'pending_approval' | 'approved' | 'reje
 
 export interface Batch {
   id: string;
+  batchCode: string; // e.g. LOTH2026-09A (cột batchCode, unique)
   productId: string;
-  manufacturingDate: string; // YYYY-MM-DD
-  expiryDate: string; // YYYY-MM-DD
+  manufacturingDate: string; // YYYY-MM-DD (API trả ISO)
+  expiryDate: string; // YYYY-MM-DD (API trả ISO)
   quantity: number;
   importPrice: number;
   status: BatchStatus; // expiring_soon <= 30 days
@@ -46,12 +51,11 @@ export interface Product {
   unit: string; // Hộp 180ml, Thùng 48 hộp, Vỉ 4 hộp, Hũ 100g, Cây kem 70g, Chai 350ml
   sellingPrice: number;
   costPrice: number;
-  barcode: string;
   minStockLevel: number;
-  description: string;
+  description?: string; // DB cho phép null
   imageUrl?: string;
   status: ProductStatus;
-  discountPercent?: number;
+  discountPercent?: number; // % giảm giá riêng của sản phẩm (0-100); cần cột discountPercent trong bảng products
 }
 
 export interface CartItem {
@@ -142,7 +146,6 @@ export interface Staff {
   code: string; // e.g. NV001
   name: string;
   phone: string;
-  email: string;
   username: string;
   password?: string; // chỉ dùng lúc tạo mới để gửi lên API (server băm bcrypt), không lưu lại ở client
   role: StaffRole;
@@ -170,6 +173,7 @@ export interface Promotion {
   usageLimit?: number;
   usedCount: number;
   status: PromotionStatus;
+  createdById?: string; // staff.id người tạo
 }
 
 export interface Supplier {
@@ -187,12 +191,12 @@ export interface PurchaseOrder {
   id: string;
   orderCode: string;
   supplierId: string;
-  supplierName: string;
+  supplierName: string; // KHÔNG có trong bảng purchase_orders: backend phải include suppliers rồi gộp vào
   createdAt: string;
   expectedDate: string;
   items: {
     productId: string;
-    productName: string;
+    productName: string; // KHÔNG có trong purchase_order_items: backend phải include products
     quantity: number;
     unitPrice: number;
     subtotal: number;

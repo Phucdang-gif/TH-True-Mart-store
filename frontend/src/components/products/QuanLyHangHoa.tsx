@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { fetchApi } from "../../lib/api";
+import { assetUrl } from "../../lib/api";
 import {
   Package,
   Tag,
@@ -9,12 +9,10 @@ import {
   Check,
   X,
   Search,
-  DollarSign,
-  Percent,
   Calendar,
-  Sparkles,
 } from "lucide-react";
 import { Product, Promotion, Category, PromotionScope } from "../../types";
+import { ProductInput } from "../../services/products";
 import {
   CATEGORY_LABELS,
   CATEGORY_LIST,
@@ -25,14 +23,28 @@ import {
 interface QuanLyHangHoaProps {
   products: Product[];
   promotions: Promotion[];
+  // Gọi API rồi mới cập nhật state; nếu API lỗi sẽ ném lỗi (throw)
   onUpdateProductPrice: (
     productId: string,
     newSellingPrice: number,
     newCostPrice: number,
-  ) => void;
-  onAddProduct: (product: Product) => void;
+  ) => Promise<void>;
+  onAddProduct: (data: ProductInput) => Promise<void>;
   onAddPromotion: (promo: Promotion) => void;
 }
+
+// Giá trị ban đầu của form thêm sản phẩm (mã để trống, người dùng tự nhập)
+const EMPTY_PRODUCT: Partial<Product> = {
+  code: "",
+  name: "",
+  category: "SUA_TUOI_TIET_TRUNG",
+  unit: "Lốc 4 hộp",
+  sellingPrice: 38000,
+  costPrice: 30000,
+  minStockLevel: 20,
+  description: "",
+  status: "active",
+};
 
 export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
   products,
@@ -54,17 +66,18 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
 
   // New Product Modal
   const [showAddModal, setShowAddModal] = useState(false);
-  const [newProd, setNewProd] = useState<Partial<Product>>({
-    code: `TH-MILK-${Math.floor(100 + Math.random() * 900)}`,
-    name: "",
-    category: "SUA_TUOI_TIET_TRUNG",
-    unit: "Lốc 4 hộp",
-    sellingPrice: 38000,
-    costPrice: 30000,
-    minStockLevel: 20,
-    description: "",
-    status: "active",
-  });
+  const [newProd, setNewProd] = useState<Partial<Product>>(EMPTY_PRODUCT);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const openAddModal = () => {
+    setError(null);
+    setShowAddModal(true);
+  };
+  const closeAddModal = () => {
+    setError(null);
+    setShowAddModal(false);
+  };
 
   // New Promotion Modal
   const [showAddPromoModal, setShowAddPromoModal] = useState(false);
@@ -99,55 +112,52 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
     setEditCostPrice(p.costPrice);
   };
 
-  // Code mới gọi API PATCH /api/products/:id
   const saveEditPrice = async (productId: string) => {
+    if (!(editSellingPrice > 0) || editCostPrice < 0) {
+      alert("Giá bán phải lớn hơn 0 và giá vốn không được âm!");
+      return;
+    }
     try {
-      await fetchApi(`/api/products/${productId}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          sellingPrice: editSellingPrice,
-          costPrice: editCostPrice,
-        }),
-      });
-
-      // Nếu Backend báo thành công, mới tiến hành cập nhật giao diện
-      onUpdateProductPrice(productId, editSellingPrice, editCostPrice);
+      await onUpdateProductPrice(productId, editSellingPrice, editCostPrice);
       setEditingId(null);
-    } catch (error) {
-      console.error("Lỗi cập nhật giá:", error);
-      alert((error as Error).message || "Lỗi khi cập nhật giá trên hệ thống!");
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : "Lỗi khi cập nhật giá trên hệ thống!",
+      );
     }
   };
 
   const handleCreateProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newProd.name) {
-      alert("Vui lòng nhập tên sản phẩm!");
+    const code = newProd.code?.trim();
+    const name = newProd.name?.trim();
+    if (!code || !name) {
+      setError("Vui lòng nhập mã và tên sản phẩm!");
       return;
     }
 
+    setError(null);
+    setSaving(true);
     try {
-      const savedProduct = await fetchApi<Product>("/api/products", {
-        method: "POST",
-        body: JSON.stringify({
-          code: newProd.code || "TH-CUSTOM",
-          name: newProd.name,
-          category: newProd.category,
-          unit: newProd.unit || "Hộp",
-          sellingPrice: Number(newProd.sellingPrice),
-          costPrice: Number(newProd.costPrice),
-          minStockLevel: Number(newProd.minStockLevel) || 10,
-          description: newProd.description || "",
-          status: "active",
-        }),
+      await onAddProduct({
+        code,
+        name,
+        category: newProd.category as Category,
+        unit: newProd.unit || "Hộp",
+        sellingPrice: Number(newProd.sellingPrice),
+        costPrice: Number(newProd.costPrice),
+        minStockLevel: Number(newProd.minStockLevel) || 10,
+        description: newProd.description || "",
+        status: "active",
       });
-
-      // Gọi hàm từ props để cập nhật lại danh sách trên UI (App.tsx)
-      onAddProduct(savedProduct);
       setShowAddModal(false);
-    } catch (error) {
-      console.error("Lỗi thêm sản phẩm:", error);
-      alert(`Lỗi: ${(error as Error).message}`);
+      setNewProd(EMPTY_PRODUCT); // reset form cho lần thêm sau
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Không lưu được sản phẩm");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -257,7 +267,7 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
         {activeTab === "products" && (
           <button
             id="btn-open-add-product"
-            onClick={() => setShowAddModal(true)}
+            onClick={openAddModal}
             className="bg-[#004885] hover:bg-[#00386b] text-white text-xs font-bold px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors shadow-xs"
           >
             <Plus className="w-4 h-4" />
@@ -346,7 +356,7 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
                       <td className="py-2.5 px-3">
                         {p.imageUrl ? (
                           <img
-                            src={`http://localhost:3001${p.imageUrl}`}
+                            src={assetUrl(p.imageUrl)}
                             alt={p.name}
                             className="w-12 h-12 object-contain rounded-md border border-slate-200 bg-white"
                           />
@@ -563,7 +573,7 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
                 Thêm sản phẩm TH true milk mới
               </h3>
               <button
-                onClick={() => setShowAddModal(false)}
+                onClick={closeAddModal}
                 className="text-slate-400 hover:text-slate-600"
               >
                 <X className="w-5 h-5" />
@@ -578,6 +588,7 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
                   </label>
                   <input
                     type="text"
+                    placeholder="VD: TH001"
                     value={newProd.code}
                     onChange={(e) =>
                       setNewProd({ ...newProd, code: e.target.value })
@@ -680,19 +691,22 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
                 </div>
               </div>
 
+              {error && <p className="text-red-600 font-medium">{error}</p>}
+
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(false)}
+                  onClick={closeAddModal}
                   className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium"
                 >
                   Hủy
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-[#004885] hover:bg-[#00386b] text-white rounded-lg font-bold shadow-xs"
+                  disabled={saving}
+                  className="px-4 py-2 bg-[#004885] hover:bg-[#00386b] text-white rounded-lg font-bold shadow-xs disabled:opacity-60"
                 >
-                  Lưu sản phẩm
+                  {saving ? "Đang lưu..." : "Lưu sản phẩm"}
                 </button>
               </div>
             </form>
