@@ -29,7 +29,6 @@ export type StockAuditStatus = 'draft' | 'pending_approval' | 'approved' | 'reje
 
 export interface Batch {
   id: string;
-  batchCode: string; // e.g. LOTH2026-09A
   productId: string;
   manufacturingDate: string; // YYYY-MM-DD
   expiryDate: string; // YYYY-MM-DD

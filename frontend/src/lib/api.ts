@@ -33,7 +33,6 @@ export async function fetchApi<T>(
   if (response.status === 204 || response.headers.get('content-length') === '0') {
     return {} as T;
   }
-
-  // Trả về dữ liệu JSON đã ép kiểu
-  return response.json();
+  const text = await response.text();
+return (text ? JSON.parse(text) : {}) as T;
 }

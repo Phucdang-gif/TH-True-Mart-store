@@ -9,7 +9,6 @@ import { BaoCaoThongKe } from "./components/reports/BaoCaoThongKe";
 import {
   INITIAL_BATCHES,
   INITIAL_STAFF,
-  INITIAL_SUPPLIERS,
   INITIAL_PROMOTIONS,
   INITIAL_INVOICES,
   INITIAL_PURCHASE_ORDERS,
@@ -18,7 +17,6 @@ import {
   Product,
   Batch,
   Staff,
-  Supplier,
   Promotion,
   Invoice,
   InvoiceApproval,
@@ -26,10 +24,11 @@ import {
   StockAudit,
 } from "./types";
 import { toNum } from "./lib/labels";
-
+import { useSuppliers } from "./hooks/useSuppliers";
 export default function App() {
   const [activeModule, setActiveModule] = useState<number>(1); // 1 to 6
-
+  const { suppliers, addSupplier, updateSupplier, removeSupplier } =
+    useSuppliers();
   // Application Data States
   const [products, setProducts] = useState<Product[]>([]);
   useEffect(() => {
@@ -58,32 +57,6 @@ export default function App() {
     };
 
     fetchProducts();
-  }, []);
-
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  useEffect(() => {
-    // Lấy danh sách Nhà cung cấp
-    const fetchSuppliers = async () => {
-      try {
-        const res = await fetch("http://localhost:3001/api/suppliers");
-        if (res.ok) setSuppliers(await res.json());
-      } catch (err) {
-        console.error(err);
-      }
-    };
-
-    // Lấy danh sách Đơn hàng PO
-    const fetchPO = async () => {
-      try {
-        const res = await fetch("http://localhost:3001/api/purchase-orders");
-        if (res.ok) setPurchaseOrders(await res.json());
-      } catch (err) {
-        console.error(err);
-      }
-    };
-
-    fetchSuppliers();
-    fetchPO();
   }, []);
 
   const [batches, setBatches] = useState<Batch[]>(INITIAL_BATCHES);
@@ -154,7 +127,7 @@ export default function App() {
     setBatches((prev) =>
       prev.map((b) => {
         const item = invoice.items.find((i) =>
-          i.batchId ? i.batchId === b.id : i.batchCode === b.batchCode,
+          i.batchId ? i.batchId === b.id : i.productId === b.productId,
         );
         return item ? { ...b, quantity: b.quantity + item.quantity } : b;
       }),
@@ -272,21 +245,6 @@ export default function App() {
     );
   };
 
-  // 5. Supplier handlers
-  const handleAddSupplier = (newSup: Supplier) => {
-    setSuppliers((prev) => [...prev, newSup]);
-  };
-
-  const handleUpdateSupplier = (updatedSup: Supplier) => {
-    setSuppliers((prev) =>
-      prev.map((s) => (s.id === updatedSup.id ? updatedSup : s)),
-    );
-  };
-
-  const handleDeleteSupplier = (supplierId: string) => {
-    setSuppliers((prev) => prev.filter((s) => s.id !== supplierId));
-  };
-
   const handleCreatePurchaseOrder = (newPO: PurchaseOrder) => {
     setPurchaseOrders((prev) => [newPO, ...prev]);
   };
@@ -352,9 +310,9 @@ export default function App() {
               suppliers={suppliers}
               products={products}
               purchaseOrders={purchaseOrders}
-              onAddSupplier={handleAddSupplier}
-              onUpdateSupplier={handleUpdateSupplier}
-              onDeleteSupplier={handleDeleteSupplier}
+              onAddSupplier={addSupplier}
+              onUpdateSupplier={updateSupplier}
+              onDeleteSupplier={removeSupplier}
               onCreatePurchaseOrder={handleCreatePurchaseOrder}
             />
           )}

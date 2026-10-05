@@ -5,25 +5,38 @@ import {
   Plus,
   Search,
   Phone,
-  Mail,
   MapPin,
-  CheckCircle,
-  Clock,
   X,
   Edit,
   Trash2,
 } from "lucide-react";
 import { Supplier, PurchaseOrder, Product } from "../../types";
+import { SupplierInput } from "../../services/suppliers";
+import { fetchApi } from "../../lib/api";
 
 interface QuanLyNhaCungCapProps {
   suppliers: Supplier[];
   products: Product[];
   purchaseOrders: PurchaseOrder[];
-  onAddSupplier: (supplier: Supplier) => void;
-  onUpdateSupplier: (supplier: Supplier) => void;
-  onDeleteSupplier: (id: string) => void;
+  // Các hàm này gọi API rồi mới cập nhật state; nếu API lỗi sẽ ném lỗi (throw)
+  onAddSupplier: (data: SupplierInput) => Promise<void>;
+  onUpdateSupplier: (id: string, data: Partial<SupplierInput>) => Promise<void>;
+  onDeleteSupplier: (id: string) => Promise<void>;
   onCreatePurchaseOrder: (po: PurchaseOrder) => void;
 }
+
+// Giá trị ban đầu của form thêm NCC (mã để trống, người dùng tự nhập)
+const EMPTY_SUPPLIER = {
+  code: "",
+  name: "",
+  contactPerson: "",
+  phone: "",
+  address: "",
+  categoryProvided: "Sữa tươi & Chế phẩm sữa TH",
+};
+
+const getErrorMessage = (err: unknown, fallback: string) =>
+  err instanceof Error ? err.message : fallback;
 
 export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
   suppliers,
@@ -39,73 +52,58 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
   );
   const [search, setSearch] = useState("");
 
+  // Thông báo lỗi dùng chung cho các modal (mỗi lúc chỉ mở một modal)
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
   // Modals
   const [showAddSupplierModal, setShowAddSupplierModal] = useState(false);
   const [showCreateOrderModal, setShowCreateOrderModal] = useState(false);
+  const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
 
   // New Supplier State (6.1)
-  const [newSup, setNewSup] = useState({
-    code: `NCC-${Math.floor(10 + Math.random() * 90)}`,
-    name: "",
-    contactPerson: "",
-    phone: "",
-    address: "",
-    categoryProvided: "Sữa tươi & Chế phẩm sữa TH",
-  });
+  const [newSup, setNewSup] = useState(EMPTY_SUPPLIER);
 
   // New Purchase Order State (6.2)
-  const [selectedSupplierId, setSelectedSupplierId] = useState<string>(
-    suppliers[0]?.id || "",
-  );
+  const [selectedSupplierId, setSelectedSupplierId] = useState<string>("");
   const [expectedDate, setExpectedDate] = useState("2026-09-25");
   const [poItems, setPoItems] = useState<
     { productId: string; quantity: number }[]
-  >([{ productId: products[0]?.id || "", quantity: 50 }]);
+  >([{ productId: "", quantity: 50 }]);
   const [poNotes, setPoNotes] = useState("");
 
-  const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
-  const handleDelete = async (id: string) => {
-    if (!window.confirm("Bạn có chắc chắn muốn xóa nhà cung cấp này?")) return;
-    try {
-      const res = await fetch(`http://localhost:3001/api/suppliers/${id}`, {
-        method: "DELETE",
-      });
-      if (res.ok) {
-        onDeleteSupplier(id);
-      }
-    } catch (error) {
-      console.error("Lỗi xóa NCC:", error);
-    }
+  // NCC và sản phẩm tải bất đồng bộ từ API nên lúc khởi tạo state có thể còn rỗng;
+  // dùng giá trị dự phòng là phần tử đầu tiên khi người dùng chưa chọn
+  const currentSupplierId = selectedSupplierId || suppliers[0]?.id || "";
+  const defaultProductId = products[0]?.id || "";
+
+  // ===== Mở / đóng modal (luôn xóa lỗi cũ) =====
+  const openAddModal = () => {
+    setError(null);
+    setShowAddSupplierModal(true);
+  };
+  const closeAddModal = () => {
+    setError(null);
+    setShowAddSupplierModal(false);
+  };
+  const openEditModal = (sup: Supplier) => {
+    setError(null);
+    setEditingSupplier(sup);
+  };
+  const closeEditModal = () => {
+    setError(null);
+    setEditingSupplier(null);
+  };
+  const openOrderModal = () => {
+    setError(null);
+    setShowCreateOrderModal(true);
+  };
+  const closeOrderModal = () => {
+    setError(null);
+    setShowCreateOrderModal(false);
   };
 
-  const handleUpdate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingSupplier) return;
-    try {
-      const res = await fetch(
-        `http://localhost:3001/api/suppliers/${editingSupplier.id}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: editingSupplier.name,
-            contactPerson: editingSupplier.contactPerson,
-            phone: editingSupplier.phone,
-            address: editingSupplier.address,
-            categoryProvided: editingSupplier.categoryProvided,
-          }),
-        },
-      );
-
-      if (res.ok) {
-        const updated = await res.json();
-        onUpdateSupplier(updated);
-        setEditingSupplier(null);
-      }
-    } catch (error) {
-      console.error("Lỗi cập nhật NCC:", error);
-    }
-  };
+  // ===== Lọc danh sách =====
   const filteredSuppliers = suppliers.filter(
     (s) =>
       s.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -113,51 +111,73 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
       s.contactPerson.toLowerCase().includes(search.toLowerCase()),
   );
 
+  // ===== Handlers nhà cung cấp =====
   const handleCreateSupplier = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newSup.name) return;
 
-    // Chuẩn bị dữ liệu gửi lên API (không tự sinh ID nữa)
-    const payload = {
-      code: newSup.code,
-      name: newSup.name,
-      contactPerson: newSup.contactPerson,
-      phone: newSup.phone,
-      address: newSup.address,
-      categoryProvided: newSup.categoryProvided,
-      status: "active",
-    };
-
+    setError(null);
+    setSaving(true);
     try {
-      // Thay đổi URL theo endpoint backend của bạn
-      const response = await fetch("http://localhost:3001/api/suppliers", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (response.ok) {
-        const savedSupplier = await response.json();
-        onAddSupplier(savedSupplier); // Cập nhật lại state ở App.tsx với dữ liệu thực tế từ backend
-        setShowAddSupplierModal(false);
-      } else {
-        console.error("Lỗi từ backend");
-      }
-    } catch (error) {
-      console.error("Lỗi kết nối API:", error);
+      await onAddSupplier({ ...newSup, status: "active" });
+      setShowAddSupplierModal(false);
+      setNewSup(EMPTY_SUPPLIER); // reset form cho lần thêm sau
+    } catch (err) {
+      setError(getErrorMessage(err, "Không lưu được nhà cung cấp"));
+    } finally {
+      setSaving(false);
     }
   };
 
+  const handleUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingSupplier) return;
+
+    setError(null);
+    setSaving(true);
+    try {
+      const { name, contactPerson, phone, address, categoryProvided } =
+        editingSupplier;
+      await onUpdateSupplier(editingSupplier.id, {
+        name,
+        contactPerson,
+        phone,
+        address,
+        categoryProvided,
+      });
+      setEditingSupplier(null);
+    } catch (err) {
+      setError(getErrorMessage(err, "Không cập nhật được nhà cung cấp"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm("Bạn có chắc chắn muốn xóa nhà cung cấp này?")) return;
+    try {
+      await onDeleteSupplier(id);
+    } catch (err) {
+      alert(getErrorMessage(err, "Không xóa được nhà cung cấp"));
+    }
+  };
+
+  // ===== Handler đơn đặt hàng (PO) =====
+  // TODO: chuyển phần gọi API sang services/purchaseOrders.ts khi làm module PO
   const handleCreateOrder = async (e: React.FormEvent) => {
     e.preventDefault();
-    const sup = suppliers.find((s) => s.id === selectedSupplierId);
-    if (!sup) return;
+    const sup = suppliers.find((s) => s.id === currentSupplierId);
+    if (!sup) {
+      setError("Chưa có nhà cung cấp để lập đơn");
+      return;
+    }
 
     const items = poItems.map((item) => {
-      const prod = products.find((p) => p.id === item.productId);
+      const productId = item.productId || defaultProductId;
+      const prod = products.find((p) => p.id === productId);
       const unitPrice = prod?.costPrice || 30000;
       return {
-        productId: item.productId,
+        productId,
         productName: prod?.name || "Sản phẩm",
         quantity: item.quantity,
         unitPrice,
@@ -168,7 +188,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
     const totalAmount = items.reduce((acc, i) => acc + i.subtotal, 0);
 
     const payload = {
-      // Backend thường sẽ tự sinh orderCode và ID
+      // Backend sẽ tự sinh orderCode và ID
       supplierId: sup.id,
       supplierName: sup.name,
       expectedDate,
@@ -178,23 +198,19 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
       notes: poNotes,
     };
 
+    setError(null);
+    setSaving(true);
     try {
-      const response = await fetch(
-        "http://localhost:3001/api/purchase-orders",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        },
-      );
-
-      if (response.ok) {
-        const savedPO = await response.json();
-        onCreatePurchaseOrder(savedPO);
-        setShowCreateOrderModal(false);
-      }
-    } catch (error) {
-      console.error("Lỗi khi tạo PO:", error);
+      const savedPO = await fetchApi<PurchaseOrder>("/api/purchase-orders", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      onCreatePurchaseOrder(savedPO);
+      setShowCreateOrderModal(false);
+    } catch (err) {
+      setError(getErrorMessage(err, "Không tạo được đơn đặt hàng"));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -229,7 +245,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
 
         {activeTab === "suppliers" ? (
           <button
-            onClick={() => setShowAddSupplierModal(true)}
+            onClick={openAddModal}
             className="bg-[#004885] hover:bg-[#00386b] text-white text-xs font-bold px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors shadow-xs"
           >
             <Plus className="w-4 h-4" />
@@ -237,7 +253,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
           </button>
         ) : (
           <button
-            onClick={() => setShowCreateOrderModal(true)}
+            onClick={openOrderModal}
             className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors shadow-xs"
           >
             <Plus className="w-4 h-4" />
@@ -277,7 +293,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                   </div>
                   <div className="flex items-center gap-1">
                     <button
-                      onClick={() => setEditingSupplier(sup)}
+                      onClick={() => openEditModal(sup)}
                       className="p-1 text-slate-400 hover:text-blue-600 bg-slate-50 rounded"
                     >
                       <Edit className="w-3.5 h-3.5" />
@@ -402,7 +418,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                 Thêm nhà cung cấp mới
               </h3>
               <button
-                onClick={() => setShowAddSupplierModal(false)}
+                onClick={closeAddModal}
                 className="text-slate-400 hover:text-slate-600"
               >
                 <X className="w-5 h-5" />
@@ -416,6 +432,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                 </label>
                 <input
                   type="text"
+                  placeholder="VD: NCC001"
                   value={newSup.code}
                   onChange={(e) =>
                     setNewSup({ ...newSup, code: e.target.value })
@@ -481,25 +498,29 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                 />
               </div>
 
+              {error && <p className="text-red-600 font-medium">{error}</p>}
+
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setShowAddSupplierModal(false)}
+                  onClick={closeAddModal}
                   className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium"
                 >
                   Hủy
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-[#004885] hover:bg-[#00386b] text-white rounded-lg font-bold shadow-xs"
+                  disabled={saving}
+                  className="px-4 py-2 bg-[#004885] hover:bg-[#00386b] text-white rounded-lg font-bold shadow-xs disabled:opacity-60"
                 >
-                  Lưu nhà cung cấp
+                  {saving ? "Đang lưu..." : "Lưu nhà cung cấp"}
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
+
       {/* Modal: Edit Supplier */}
       {editingSupplier && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
@@ -509,7 +530,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                 Sửa thông tin nhà cung cấp
               </h3>
               <button
-                onClick={() => setEditingSupplier(null)}
+                onClick={closeEditModal}
                 className="text-slate-400 hover:text-slate-600"
               >
                 <X className="w-5 h-5" />
@@ -517,7 +538,6 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
             </div>
 
             <form onSubmit={handleUpdate} className="space-y-3 text-xs">
-              {/* Form inputs giống hệt lúc tạo, chỉ đổi value thành editingSupplier.tên_trường */}
               <div>
                 <label className="font-bold text-slate-700 block mb-1">
                   Tên đơn vị cung cấp
@@ -586,25 +606,29 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                 />
               </div>
 
+              {error && <p className="text-red-600 font-medium">{error}</p>}
+
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setEditingSupplier(null)}
+                  onClick={closeEditModal}
                   className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium"
                 >
                   Hủy
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-bold shadow-xs"
+                  disabled={saving}
+                  className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-bold shadow-xs disabled:opacity-60"
                 >
-                  Cập nhật
+                  {saving ? "Đang lưu..." : "Cập nhật"}
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
+
       {/* Modal: 6.2 Lập đơn đặt hàng */}
       {showCreateOrderModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
@@ -614,7 +638,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                 6.2 Lập đơn đặt hàng nhập kho (PO)
               </h3>
               <button
-                onClick={() => setShowCreateOrderModal(false)}
+                onClick={closeOrderModal}
                 className="text-slate-400 hover:text-slate-600"
               >
                 <X className="w-5 h-5" />
@@ -627,7 +651,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                   Nhà cung cấp tiếp nhận
                 </label>
                 <select
-                  value={selectedSupplierId}
+                  value={currentSupplierId}
                   onChange={(e) => setSelectedSupplierId(e.target.value)}
                   className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-medium"
                 >
@@ -661,10 +685,13 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                   {poItems.map((item, idx) => (
                     <div key={idx} className="flex gap-2">
                       <select
-                        value={item.productId}
+                        value={item.productId || defaultProductId}
                         onChange={(e) => {
                           const updated = [...poItems];
-                          updated[idx].productId = e.target.value;
+                          updated[idx] = {
+                            ...updated[idx],
+                            productId: e.target.value,
+                          };
                           setPoItems(updated);
                         }}
                         className="flex-1 p-2 bg-slate-50 border border-slate-200 rounded-lg"
@@ -681,7 +708,10 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                         value={item.quantity}
                         onChange={(e) => {
                           const updated = [...poItems];
-                          updated[idx].quantity = Number(e.target.value);
+                          updated[idx] = {
+                            ...updated[idx],
+                            quantity: Number(e.target.value),
+                          };
                           setPoItems(updated);
                         }}
                         className="w-24 p-2 bg-slate-50 border border-slate-200 rounded-lg text-right font-bold"
@@ -705,19 +735,22 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                 />
               </div>
 
+              {error && <p className="text-red-600 font-medium">{error}</p>}
+
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setShowCreateOrderModal(false)}
+                  onClick={closeOrderModal}
                   className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium"
                 >
                   Hủy
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold shadow-xs"
+                  disabled={saving}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold shadow-xs disabled:opacity-60"
                 >
-                  Gửi đơn đặt hàng
+                  {saving ? "Đang gửi..." : "Gửi đơn đặt hàng"}
                 </button>
               </div>
             </form>
