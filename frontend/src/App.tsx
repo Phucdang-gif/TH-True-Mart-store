@@ -6,6 +6,8 @@ import { QuanLyKho } from "./components/inventory/QuanLyKho";
 import { QuanLyNhanVien } from "./components/staff/QuanLyNhanVien";
 import { QuanLyNhaCungCap } from "./components/suppliers/QuanLyNhaCungCap";
 import { BaoCaoThongKe } from "./components/reports/BaoCaoThongKe";
+import { Routes, Route, Navigate } from "react-router-dom";
+import Login from "./components/login/Login";
 import {
   INITIAL_BATCHES,
   INITIAL_STAFF,
@@ -44,9 +46,9 @@ export default function App() {
   const [stockAudits, setStockAudits] = useState<StockAudit[]>([]);
 
   // Nhân viên đang thao tác. TODO: thay bằng tài khoản đăng nhập (auth_sessions) khi có màn hình đăng nhập.
-  const currentStaff: Staff =
-    staffList.find((s) => s.role === "manager" && s.status === "active") ||
-    staffList[0];
+  // Đã xử lý TODO: Lấy thông tin tài khoản đang đăng nhập thật từ localStorage
+  const userStr = localStorage.getItem("user_info");
+  const currentStaff = userStr ? JSON.parse(userStr) : staffList[0];
 
   // Expiring Batches calculation for urgent badge in Navbar
   const getDaysLeft = (expiryDateStr: string) => {
@@ -206,83 +208,103 @@ export default function App() {
     setPurchaseOrders((prev) => [newPO, ...prev]);
   };
 
+  const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
+    const token = localStorage.getItem("access_token");
+    if (!token) {
+      // Nếu chưa có token, tự động chuyển hướng (đá) về trang login
+      return <Navigate to="/login" replace />;
+    }
+    // Nếu có token rồi thì cho phép hiển thị nội dung bên trong
+    return children;
+  };
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800">
-      {/* Top Main Navigation Bar with 6 modules */}
-      <Navbar
-        activeModule={activeModule}
-        setActiveModule={setActiveModule}
-        expiringCount={expiringCount}
+    <Routes>
+      {/* Route không cần bảo vệ */}
+      <Route path="/login" element={<Login />} />
+
+      {/* Route CẦN bảo vệ */}
+      <Route
+        path="/"
+        element={
+          <ProtectedRoute>
+            <div className="flex flex-col min-h-screen font-sans bg-slate-100 text-slate-800">
+              <Navbar
+                activeModule={activeModule}
+                setActiveModule={setActiveModule}
+                expiringCount={expiringCount}
+              />
+
+              <main className="flex-1 w-full max-w-7xl p-4 mx-auto sm:p-6">
+                <div>
+                  {activeModule === 1 && (
+                    <BanHangPOS
+                      products={products}
+                      batches={batches}
+                      currentStaff={currentStaff}
+                      promotions={promotions}
+                      invoices={invoices}
+                      onCompleteSale={handleCreateInvoice}
+                      onReturnInvoice={handleReturnInvoice}
+                      onCancelInvoice={handleCancelInvoice}
+                    />
+                  )}
+
+                  {activeModule === 2 && (
+                    <QuanLyHangHoa
+                      products={products}
+                      promotions={promotions}
+                      onUpdateProductPrice={updateProductPrice}
+                      onAddProduct={addProduct}
+                      onAddPromotion={handleAddPromotion}
+                    />
+                  )}
+
+                  {activeModule === 3 && (
+                    <QuanLyKho
+                      products={products}
+                      batches={batches}
+                      onAddBatch={handleAddBatch}
+                      onAdjustStock={handleAdjustStock}
+                      currentStaff={currentStaff}
+                      audits={stockAudits}
+                      onSubmitAudit={handleSubmitAudit}
+                      onReviewAudit={handleReviewAudit}
+                    />
+                  )}
+
+                  {activeModule === 4 && (
+                    <QuanLyNhanVien
+                      staffList={staffList}
+                      onAddStaff={handleAddStaff}
+                      onUpdateShift={handleUpdateShift}
+                    />
+                  )}
+
+                  {activeModule === 5 && (
+                    <QuanLyNhaCungCap
+                      suppliers={suppliers}
+                      products={products}
+                      purchaseOrders={purchaseOrders}
+                      onAddSupplier={addSupplier}
+                      onUpdateSupplier={updateSupplier}
+                      onDeleteSupplier={removeSupplier}
+                      onCreatePurchaseOrder={handleCreatePurchaseOrder}
+                    />
+                  )}
+
+                  {activeModule === 6 && (
+                    <BaoCaoThongKe
+                      invoices={invoices}
+                      products={products}
+                      batches={batches}
+                    />
+                  )}
+                </div>
+              </main>
+            </div>
+          </ProtectedRoute>
+        }
       />
-
-      {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6">
-        <div>
-          {activeModule === 1 && (
-            <BanHangPOS
-              products={products}
-              batches={batches}
-              currentStaff={currentStaff}
-              promotions={promotions}
-              invoices={invoices}
-              onCompleteSale={handleCreateInvoice}
-              onReturnInvoice={handleReturnInvoice}
-              onCancelInvoice={handleCancelInvoice}
-            />
-          )}
-
-          {activeModule === 2 && (
-            <QuanLyHangHoa
-              products={products}
-              promotions={promotions}
-              onUpdateProductPrice={updateProductPrice}
-              onAddProduct={addProduct}
-              onAddPromotion={handleAddPromotion}
-            />
-          )}
-
-          {activeModule === 3 && (
-            <QuanLyKho
-              products={products}
-              batches={batches}
-              onAddBatch={handleAddBatch}
-              onAdjustStock={handleAdjustStock}
-              currentStaff={currentStaff}
-              audits={stockAudits}
-              onSubmitAudit={handleSubmitAudit}
-              onReviewAudit={handleReviewAudit}
-            />
-          )}
-
-          {activeModule === 4 && (
-            <QuanLyNhanVien
-              staffList={staffList}
-              onAddStaff={handleAddStaff}
-              onUpdateShift={handleUpdateShift}
-            />
-          )}
-
-          {activeModule === 5 && (
-            <QuanLyNhaCungCap
-              suppliers={suppliers}
-              products={products}
-              purchaseOrders={purchaseOrders}
-              onAddSupplier={addSupplier}
-              onUpdateSupplier={updateSupplier}
-              onDeleteSupplier={removeSupplier}
-              onCreatePurchaseOrder={handleCreatePurchaseOrder}
-            />
-          )}
-
-          {activeModule === 6 && (
-            <BaoCaoThongKe
-              invoices={invoices}
-              products={products}
-              batches={batches}
-            />
-          )}
-        </div>
-      </main>
-    </div>
+    </Routes>
   );
 }

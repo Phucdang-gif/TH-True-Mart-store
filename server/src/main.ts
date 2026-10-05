@@ -3,7 +3,7 @@ import { AppModule } from './app.module.js';
 import { ValidationPipe } from '@nestjs/common';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-
+  app.setGlobalPrefix('api');
   // Bật tính năng tự động Validate
   app.useGlobalPipes(new ValidationPipe({
     whitelist: true, // Tự động loại bỏ các trường rác không có trong DTO
