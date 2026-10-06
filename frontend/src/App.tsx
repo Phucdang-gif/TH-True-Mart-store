@@ -26,6 +26,7 @@ import {
 } from "./types";
 import { useSuppliers } from "./hooks/useSuppliers";
 import { useProducts } from "./hooks/useProducts";
+import { useStaff } from "./hooks/useStaff";
 
 export default function App() {
   const [activeModule, setActiveModule] = useState<number>(1); // 1 to 6
@@ -34,10 +35,10 @@ export default function App() {
   const { suppliers, addSupplier, updateSupplier, removeSupplier } =
     useSuppliers();
   const { products, addProduct, updateProductPrice } = useProducts();
-
+  const { staffList, addStaff, updateShift } = useStaff();
   // ===== Dữ liệu tạm (dữ liệu giả, sẽ nối API ở các module sau) =====
   const [batches, setBatches] = useState<Batch[]>(INITIAL_BATCHES);
-  const [staffList, setStaffList] = useState<Staff[]>(INITIAL_STAFF);
+
   const [promotions, setPromotions] = useState<Promotion[]>(INITIAL_PROMOTIONS);
   const [invoices, setInvoices] = useState<Invoice[]>(INITIAL_INVOICES);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>(
@@ -193,17 +194,6 @@ export default function App() {
     }
   };
 
-  // 4. Staff handlers
-  const handleAddStaff = (newStaff: Staff) => {
-    setStaffList((prev) => [...prev, newStaff]);
-  };
-
-  const handleUpdateShift = (staffId: string, newShift: Staff["shift"]) => {
-    setStaffList((prev) =>
-      prev.map((s) => (s.id === staffId ? { ...s, shift: newShift } : s)),
-    );
-  };
-
   const handleCreatePurchaseOrder = (newPO: PurchaseOrder) => {
     setPurchaseOrders((prev) => [newPO, ...prev]);
   };
@@ -275,8 +265,8 @@ export default function App() {
                   {activeModule === 4 && (
                     <QuanLyNhanVien
                       staffList={staffList}
-                      onAddStaff={handleAddStaff}
-                      onUpdateShift={handleUpdateShift}
+                      onAddStaff={addStaff}
+                      onUpdateShift={updateShift}
                     />
                   )}
 
