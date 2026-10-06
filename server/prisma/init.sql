@@ -83,9 +83,39 @@ CREATE INDEX "role_permissions_permissionId_idx" ON "role_permissions"("permissi
 -- =============================================================================
 -- NHÂN VIÊN & TÀI KHOẢN (Package 5)
 -- =============================================================================
+-- =============================================================================
+-- SINH MÃ TỰ ĐỘNG (NV001, NCC001, PO0001, KK0001)
+-- Mỗi bảng có 1 sequence. Hàm next_code() bỏ qua các mã đã tồn tại (vd mã ghi
+-- cứng trong seed.sql) nên không cần setval() thủ công và không bao giờ trùng.
+-- =============================================================================
+CREATE SEQUENCE staff_code_seq START 1;
+CREATE SEQUENCE supplier_code_seq START 1;
+CREATE SEQUENCE po_code_seq START 1;
+CREATE SEQUENCE audit_code_seq START 1;
+CREATE OR REPLACE FUNCTION next_code(
+    p_prefix TEXT,
+    p_seq REGCLASS,
+    p_pad INT,
+    p_table TEXT,
+    p_col TEXT
+  ) RETURNS TEXT AS $$
+DECLARE v_code TEXT;
+v_exists BOOLEAN;
+BEGIN LOOP v_code := p_prefix || lpad(nextval(p_seq)::text, p_pad, '0');
+EXECUTE format(
+  'SELECT EXISTS (SELECT 1 FROM %I WHERE %I = $1)',
+  p_table,
+  p_col
+) INTO v_exists USING v_code;
+EXIT
+WHEN NOT v_exists;
+END LOOP;
+RETURN v_code;
+END;
+$$ LANGUAGE plpgsql;
 CREATE TABLE "staff" (
   "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  "code" TEXT NOT NULL UNIQUE,
+  "code" TEXT NOT NULL UNIQUE DEFAULT next_code('NV', 'staff_code_seq', 3, 'staff', 'code'),
   "name" TEXT NOT NULL,
   "phone" TEXT NOT NULL,
   "username" TEXT NOT NULL UNIQUE,
@@ -549,7 +579,13 @@ CREATE INDEX "invoice_promotions_promotionId_idx" ON "invoice_promotions"("promo
 -- =============================================================================
 CREATE TABLE "suppliers" (
   "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  "code" TEXT NOT NULL UNIQUE,
+  "code" TEXT NOT NULL UNIQUE DEFAULT next_code(
+    'NCC',
+    'supplier_code_seq',
+    3,
+    'suppliers',
+    'code'
+  ),
   "name" TEXT NOT NULL,
   "contactPerson" TEXT NOT NULL,
   "phone" TEXT NOT NULL,
@@ -559,7 +595,13 @@ CREATE TABLE "suppliers" (
 );
 CREATE TABLE "purchase_orders" (
   "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  "orderCode" TEXT NOT NULL UNIQUE,
+  "orderCode" TEXT NOT NULL UNIQUE DEFAULT next_code(
+    'PO',
+    'po_code_seq',
+    4,
+    'purchase_orders',
+    'orderCode'
+  ),
   "supplierId" TEXT NOT NULL REFERENCES "suppliers"("id"),
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "expectedDate" TIMESTAMP(3) NOT NULL,
@@ -583,7 +625,13 @@ CREATE INDEX "purchase_order_items_productId_idx" ON "purchase_order_items"("pro
 -- =============================================================================
 CREATE TABLE "stock_audits" (
   "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  "auditCode" TEXT NOT NULL UNIQUE,
+  "auditCode" TEXT NOT NULL UNIQUE DEFAULT next_code(
+    'KK',
+    'audit_code_seq',
+    4,
+    'stock_audits',
+    'auditCode'
+  ),
   "auditDate" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "performedById" TEXT NOT NULL REFERENCES "staff"("id"),
   "approvedById" TEXT REFERENCES "staff"("id"),

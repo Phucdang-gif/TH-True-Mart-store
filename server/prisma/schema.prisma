@@ -74,7 +74,7 @@ model purchase_order_items {
 
 model purchase_orders {
   id                   String                 @id @default(dbgenerated("(gen_random_uuid())::text"))
-  orderCode            String                 @unique
+  orderCode            String                 @unique @default(dbgenerated("next_code('PO'::text, 'po_code_seq'::regclass, 4, 'purchase_orders'::text, 'orderCode'::text)"))
   supplierId           String
   createdAt            DateTime               @default(now())
   expectedDate         DateTime
@@ -89,7 +89,7 @@ model purchase_orders {
 
 model staff {
   id                                              String                  @id @default(dbgenerated("(gen_random_uuid())::text"))
-  code                                            String                  @unique
+  code                                            String                  @unique @default(dbgenerated("next_code('NV'::text, 'staff_code_seq'::regclass, 3, 'staff'::text, 'code'::text)"))
   name                                            String
   phone                                           String
   username                                        String                  @unique
@@ -139,7 +139,7 @@ model stock_audit_items {
 
 model stock_audits {
   id                                      String              @id @default(dbgenerated("(gen_random_uuid())::text"))
-  auditCode                               String              @unique
+  auditCode                               String              @unique @default(dbgenerated("next_code('KK'::text, 'audit_code_seq'::regclass, 4, 'stock_audits'::text, 'auditCode'::text)"))
   auditDate                               DateTime            @default(now())
   performedById                           String
   approvedById                            String?
@@ -155,7 +155,7 @@ model stock_audits {
 
 model suppliers {
   id               String            @id @default(dbgenerated("(gen_random_uuid())::text"))
-  code             String            @unique
+  code             String            @unique @default(dbgenerated("next_code('NCC'::text, 'supplier_code_seq'::regclass, 3, 'suppliers'::text, 'code'::text)"))
   name             String
   contactPerson    String
   phone            String

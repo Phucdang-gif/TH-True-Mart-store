@@ -2,7 +2,7 @@ import { execSync } from 'node:child_process';
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
-
+//npx ts-node prisma/seed.ts
 async function main() {
   console.log('Bắt đầu đồng bộ cơ sở dữ liệu từ file SQL...');
 

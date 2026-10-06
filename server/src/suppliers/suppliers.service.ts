@@ -7,7 +7,6 @@ import {PrismaService} from '../prisma/prisma.service';
 export class SuppliersService {
   constructor(private prisma: PrismaService) {}
   async create(createSupplierDto: CreateSupplierDto) {
-    // Tìm kiếm theo code (đã bỏ phần OR dư thừa do không còn dùng barcode)
     const existingSupplier = await this.prisma.suppliers.findFirst({
       where: {code: createSupplierDto.code},
     });
