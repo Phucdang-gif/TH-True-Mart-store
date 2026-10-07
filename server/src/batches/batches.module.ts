@@ -5,5 +5,6 @@ import { BatchesController } from './batches.controller';
 @Module({
   controllers: [BatchesController],
   providers: [BatchesService],
+  exports: [BatchesService],
 })
 export class BatchesModule {}
