@@ -1,15 +1,14 @@
 import React, { useState } from "react";
 import {
-  UserCheck,
   ShieldCheck,
-  Clock,
   UserPlus,
   KeyRound,
   Search,
-  Phone,
-  Mail,
   CheckCircle,
   X,
+  Trash2,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { Staff } from "../../types";
 import { SHIFT_LABELS, SHIFT_LIST } from "../../lib/labels";
@@ -20,17 +19,33 @@ interface QuanLyNhanVienProps {
     staff: Partial<Staff>,
   ) => Promise<{ success: boolean; message?: string }>;
   onUpdateShift: (staffId: string, newShift: Staff["shift"]) => void;
+  onDeleteStaff: (id: string) => Promise<void>;
+  onChangePassword: (id: string, newPassword: string) => Promise<void>;
 }
+
+const getErrorMessage = (err: unknown, fallback: string) =>
+  err instanceof Error ? err.message : fallback;
 
 export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
   staffList,
   onAddStaff,
   onUpdateShift,
+  onDeleteStaff,
+  onChangePassword,
 }) => {
   const [search, setSearch] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // State cho modal đổi mật khẩu
+  const [passwordTarget, setPasswordTarget] = useState<Staff | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwError, setPwError] = useState<string | null>(null);
+
+  // Form tạo nhân viên — KHÔNG có code (backend tự sinh)
   const [newStaff, setNewStaff] = useState<Partial<Staff>>({
-    code: `NV0${staffList.length + 1}`,
     name: "",
     phone: "",
     username: "",
@@ -46,6 +61,7 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
       s.username.toLowerCase().includes(search.toLowerCase()),
   );
 
+  // ===== Handlers cũ =====
   const handleCreateStaff = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newStaff.name || !newStaff.username) {
@@ -53,27 +69,21 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
       return;
     }
 
-    // Không kiểm tra trùng lặp ở frontend nữa, việc này do Backend lo
-
-    // Tạo object gửi lên Backend (KHÔNG CÓ id, code, mật khẩu tĩnh)
     const staffToAdd: Partial<Staff> = {
       name: newStaff.name,
       phone: newStaff.phone || "",
       username: newStaff.username,
-      password: "Password123", // Gửi pass mặc định, Backend sẽ tự bcrypt
+      password: "123456", // ✅ khớp với ghi chú UI
       role: newStaff.role || "cashier",
       status: "active",
       shift: newStaff.shift || "SANG",
     };
 
-    // Gọi hàm addStaff từ Hook (đã truyền qua props)
     const res = await onAddStaff(staffToAdd);
 
     if (res && !res.success) {
-      // Hiển thị lỗi từ backend (ví dụ: "Tên đăng nhập đã tồn tại")
       alert(res.message);
     } else {
-      // Thành công thì đóng modal và reset lại form trống
       setShowAddModal(false);
       setNewStaff({
         name: "",
@@ -83,6 +93,64 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
         shift: "SANG",
         status: "active",
       });
+    }
+  };
+
+  // 🆕 Xóa nhân viên
+  const handleDeleteStaff = async (staff: Staff) => {
+    if (
+      !window.confirm(
+        `Xóa nhân viên "${staff.name}" (${staff.username})?\n` +
+          `Nếu nhân viên đã có hóa đơn/ca làm việc, hệ thống sẽ chuyển sang trạng thái "Ngừng hoạt động" thay vì xóa cứng.`,
+      )
+    )
+      return;
+
+    setDeletingId(staff.id);
+    try {
+      await onDeleteStaff(staff.id);
+    } catch (err) {
+      alert(getErrorMessage(err, "Không xóa được nhân viên"));
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  // 🆕 Mở/đóng modal đổi mật khẩu
+  const openPasswordModal = (staff: Staff) => {
+    setPasswordTarget(staff);
+    setNewPassword("");
+    setShowPassword(false);
+    setPwError(null);
+  };
+
+  const closePasswordModal = () => {
+    setPasswordTarget(null);
+    setNewPassword("");
+    setShowPassword(false);
+    setPwError(null);
+  };
+
+  // 🆕 Submit đổi mật khẩu
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!passwordTarget) return;
+
+    if (newPassword.length < 6) {
+      setPwError("Mật khẩu phải có ít nhất 6 ký tự");
+      return;
+    }
+
+    setPwError(null);
+    setPwSaving(true);
+    try {
+      await onChangePassword(passwordTarget.id, newPassword);
+      alert(`Đã đổi mật khẩu cho "${passwordTarget.name}"`);
+      closePasswordModal();
+    } catch (err) {
+      setPwError(getErrorMessage(err, "Không đổi được mật khẩu"));
+    } finally {
+      setPwSaving(false);
     }
   };
 
@@ -134,7 +202,7 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Role Permissions Summary Box (5.1) */}
+        {/* Role Permissions Summary Box */}
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
           <h4 className="font-bold text-xs text-slate-900 flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-[#004885]" />
@@ -171,7 +239,7 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
           </div>
         </div>
 
-        {/* Staff List & Shift Management (5.2) */}
+        {/* Staff List & Shift Management */}
         <div className="lg:col-span-2 bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-4">
           <div className="flex items-center justify-between">
             <div className="relative w-72">
@@ -192,56 +260,89 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
                 <tr className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
                   <th className="py-2.5 px-3">Mã NV</th>
                   <th className="py-2.5 px-3">Họ tên & Tài khoản</th>
-                  <th className="py-2.5 px-3">Vai trò phân quyền (5.1)</th>
-                  <th className="py-2.5 px-3">5.2 Ca làm việc</th>
+                  <th className="py-2.5 px-3">Vai trò phân quyền</th>
+                  <th className="py-2.5 px-3">Ca làm việc</th>
                   <th className="py-2.5 px-3 text-center">Trạng thái</th>
+                  <th className="py-2.5 px-3 text-center">Thao tác</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredStaff.map((s) => (
-                  <tr key={s.id} className="hover:bg-slate-50/70">
-                    <td className="py-2.5 px-3 font-mono font-bold text-[#004885]">
-                      {s.code}
-                    </td>
-                    <td className="py-2.5 px-3">
-                      <div className="font-semibold text-slate-900">
-                        {s.name}
-                      </div>
-                      <div className="text-[11px] text-slate-500 font-mono">
-                        @{s.username} • {s.phone}
-                      </div>
-                    </td>
-                    <td className="py-2.5 px-3">{getRoleBadge(s.role)}</td>
-                    <td className="py-2.5 px-3">
-                      <select
-                        value={s.shift}
-                        onChange={(e) =>
-                          onUpdateShift(s.id, e.target.value as Staff["shift"])
-                        }
-                        className="p-1 bg-slate-50 border border-slate-200 rounded text-xs text-slate-800 font-medium"
-                      >
-                        {SHIFT_LIST.map((sh) => (
-                          <option key={sh} value={sh}>
-                            {SHIFT_LABELS[sh]}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="py-2.5 px-3 text-center">
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          s.status === "active"
-                            ? "bg-emerald-100 text-emerald-800"
-                            : "bg-slate-200 text-slate-600"
-                        }`}
-                      >
-                        {s.status === "active"
-                          ? "Đang làm việc"
-                          : "Ngừng hoạt động"}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {filteredStaff.map((s) => {
+                  const isDeleting = deletingId === s.id;
+                  return (
+                    <tr key={s.id} className="hover:bg-slate-50/70">
+                      <td className="py-2.5 px-3 font-mono font-bold text-[#004885]">
+                        {s.code}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <div className="font-semibold text-slate-900">
+                          {s.name}
+                        </div>
+                        <div className="text-[11px] text-slate-500 font-mono">
+                          @{s.username} • {s.phone}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3">{getRoleBadge(s.role)}</td>
+                      <td className="py-2.5 px-3">
+                        <select
+                          value={s.shift}
+                          onChange={(e) =>
+                            onUpdateShift(
+                              s.id,
+                              e.target.value as Staff["shift"],
+                            )
+                          }
+                          className="p-1 bg-slate-50 border border-slate-200 rounded text-xs text-slate-800 font-medium"
+                        >
+                          {SHIFT_LIST.map((sh) => (
+                            <option key={sh} value={sh}>
+                              {SHIFT_LABELS[sh]}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="py-2.5 px-3 text-center">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            s.status === "active"
+                              ? "bg-emerald-100 text-emerald-800"
+                              : "bg-slate-200 text-slate-600"
+                          }`}
+                        >
+                          {s.status === "active"
+                            ? "Đang làm việc"
+                            : "Ngừng hoạt động"}
+                        </span>
+                      </td>
+
+                      {/* Cột thao tác */}
+                      <td className="py-2.5 px-3">
+                        <div className="flex items-center justify-center gap-1">
+                          <button
+                            onClick={() => openPasswordModal(s)}
+                            disabled={isDeleting}
+                            className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded disabled:opacity-40"
+                            title="Đổi mật khẩu"
+                          >
+                            <KeyRound className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteStaff(s)}
+                            disabled={isDeleting}
+                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded disabled:opacity-40"
+                            title="Xóa nhân viên"
+                          >
+                            {isDeleting ? (
+                              <span className="inline-block w-3.5 h-3.5 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                              <Trash2 className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -272,13 +373,13 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
                   </label>
                   <input
                     type="text"
-                    value={newStaff.code}
-                    onChange={(e) =>
-                      setNewStaff({ ...newStaff, code: e.target.value })
-                    }
-                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-mono font-bold"
-                    required
+                    value="(Hệ thống tự sinh)"
+                    disabled
+                    className="w-full p-2 bg-slate-100 border border-slate-200 rounded-lg font-mono font-bold text-slate-500 cursor-not-allowed"
                   />
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    NV001, NV002... cấp tự động
+                  </p>
                 </div>
                 <div>
                   <label className="font-bold text-slate-700 block mb-1">
@@ -313,20 +414,18 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">
-                    Số điện thoại
-                  </label>
-                  <input
-                    type="tel"
-                    value={newStaff.phone}
-                    onChange={(e) =>
-                      setNewStaff({ ...newStaff, phone: e.target.value })
-                    }
-                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-mono"
-                  />
-                </div>
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">
+                  Số điện thoại
+                </label>
+                <input
+                  type="tel"
+                  value={newStaff.phone}
+                  onChange={(e) =>
+                    setNewStaff({ ...newStaff, phone: e.target.value })
+                  }
+                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-mono"
+                />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -392,6 +491,94 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
                   className="px-4 py-2 bg-[#004885] hover:bg-[#00386b] text-white rounded-lg font-bold shadow-xs"
                 >
                   Tạo tài khoản
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Đổi mật khẩu */}
+      {passwordTarget && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                <KeyRound className="w-4 h-4 text-amber-500" />
+                Đổi mật khẩu tài khoản
+              </h3>
+              <button
+                onClick={closePasswordModal}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="text-xs bg-slate-50 p-3 rounded-lg border border-slate-100">
+              <p className="text-slate-700">
+                Nhân viên:{" "}
+                <strong className="text-slate-900">
+                  {passwordTarget.name}
+                </strong>
+              </p>
+              <p className="text-slate-500 font-mono text-[11px]">
+                @{passwordTarget.username}
+              </p>
+            </div>
+
+            <form onSubmit={handleChangePassword} className="space-y-3 text-xs">
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">
+                  Mật khẩu mới
+                </label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Ít nhất 6 ký tự"
+                    minLength={6}
+                    className="w-full p-2 pr-10 bg-slate-50 border border-slate-200 rounded-lg font-mono"
+                    required
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
+                    title={showPassword ? "Ẩn mật khẩu" : "Hiện mật khẩu"}
+                  >
+                    {showPassword ? (
+                      <EyeOff className="w-4 h-4" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {pwError && <p className="text-red-600 font-medium">{pwError}</p>}
+
+              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-100 p-2 rounded">
+                ⚠️ Sau khi đổi, nhân viên nên đăng xuất và đăng nhập lại bằng
+                mật khẩu mới.
+              </p>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={closePasswordModal}
+                  className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={pwSaving}
+                  className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-bold shadow-xs disabled:opacity-60"
+                >
+                  {pwSaving ? "Đang lưu..." : "Đổi mật khẩu"}
                 </button>
               </div>
             </form>

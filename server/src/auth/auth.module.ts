@@ -10,7 +10,7 @@ import { PrismaModule } from '../prisma/prisma.module';
     JwtModule.register({
       global: true,
       secret: process.env.JWT_SECRET || 'MOCK_SECRET_KEY_CHUA_CO_TRONG_ENV', // Thêm JWT_SECRET vào file .env
-      signOptions: { expiresIn: '1m' }, // Token hết hạn sau 1 ngày
+      signOptions: { expiresIn: '1d' }, // Token hết hạn sau 1 ngày
     }),
   ],
   providers: [AuthService, JwtStrategy],

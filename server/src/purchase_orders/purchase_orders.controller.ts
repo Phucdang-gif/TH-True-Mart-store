@@ -1,34 +1,53 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
-import { PurchaseOrdersService } from './purchase_orders.service';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { CreatePurchaseOrderDto } from './dto/create-purchase_order.dto';
+import { QueryPurchaseOrderDto } from './dto/query-purchase_order.dto';
+import { UpdatePurchaseOrderStatusDto } from './dto/update-purchase_order-status.dto';
 import { UpdatePurchaseOrderDto } from './dto/update-purchase_order.dto';
+import { PurchaseOrdersService } from './purchase_orders.service';
 
 @Controller('purchase-orders')
 export class PurchaseOrdersController {
-  constructor(private readonly purchaseOrdersService: PurchaseOrdersService) {}
+  constructor(private readonly service: PurchaseOrdersService) {}
 
   @Post()
-  create(@Body() createPurchaseOrderDto: CreatePurchaseOrderDto) {
-    return this.purchaseOrdersService.create(createPurchaseOrderDto);
+  create(@Body() dto: CreatePurchaseOrderDto) {
+    return this.service.create(dto);
   }
 
   @Get()
-  findAll() {
-    return this.purchaseOrdersService.findAll();
+  findAll(@Query() query: QueryPurchaseOrderDto) {
+    return this.service.findAll(query);
   }
 
   @Get(':id')
   findOne(@Param('id') id: string) {
-    return this.purchaseOrdersService.findOne(+id);
+    return this.service.findOne(id);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updatePurchaseOrderDto: UpdatePurchaseOrderDto) {
-    return this.purchaseOrdersService.update(+id, updatePurchaseOrderDto);
+  update(@Param('id') id: string, @Body() dto: UpdatePurchaseOrderDto) {
+    return this.service.update(id, dto);
+  }
+
+  @Patch(':id/status')
+  updateStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdatePurchaseOrderStatusDto,
+  ) {
+    return this.service.updateStatus(id, dto);
   }
 
   @Delete(':id')
   remove(@Param('id') id: string) {
-    return this.purchaseOrdersService.remove(+id);
+    return this.service.remove(id);
   }
 }

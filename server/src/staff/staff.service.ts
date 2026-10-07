@@ -11,7 +11,6 @@ import { PrismaService } from '../prisma/prisma.service';
 
 const SALT_ROUNDS = 10;
 
-// Thông báo thân thiện cho từng cột UNIQUE bị trùng
 const UNIQUE_MESSAGES: Record<string, string> = {
   username: 'Tên đăng nhập đã tồn tại',
   code: 'Mã nhân viên đã tồn tại',
@@ -22,12 +21,13 @@ export class StaffService {
   constructor(private prisma: PrismaService) {}
 
   // Không bao giờ trả hash mật khẩu ra ngoài API
-  private toSafe<T extends { password: string }>(staff: T): Omit<T, 'password'> {
+  private toSafe<T extends { password: string }>(
+    staff: T,
+  ): Omit<T, 'password'> {
     const { password, ...rest } = staff;
     return rest;
   }
 
-  // Chuyển lỗi Prisma thành lỗi HTTP có ý nghĩa thay vì 500
   private handleError(e: unknown): never {
     if (e instanceof Prisma.PrismaClientKnownRequestError) {
       if (e.code === 'P2002') {
@@ -54,7 +54,6 @@ export class StaffService {
     try {
       const staff = await this.prisma.staff.create({
         data: {
-          // Khai báo tường minh các trường từ frontend gửi lên
           name: dto.name,
           phone: dto.phone,
           username: dto.username,
@@ -63,6 +62,8 @@ export class StaffService {
           status: dto.status,
           password: await bcrypt.hash(dto.password, SALT_ROUNDS),
           passwordChangedAt: new Date(),
+          // ✅ Bắt buộc đổi mật khẩu ở lần đăng nhập đầu
+          mustChangePassword: true,
         },
       });
       return this.toSafe(staff);
@@ -94,9 +95,9 @@ export class StaffService {
           ...(password && {
             password: await bcrypt.hash(password, SALT_ROUNDS),
             passwordChangedAt: new Date(),
+            // ✅ Đã đổi xong → không bắt đổi lại nữa
+            mustChangePassword: false,
           }),
-          // schema dùng @default(now()) chứ không phải @updatedAt
-          // nên phải tự cập nhật
           updatedAt: new Date(),
         },
       });
@@ -111,19 +112,21 @@ export class StaffService {
       const staff = await this.prisma.staff.delete({ where: { id } });
       return this.toSafe(staff);
     } catch (e) {
-      // Ép kiểu an toàn: kiểm tra xem e có phải là lỗi Prisma và có mã P2003 không
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2003') {
+      // Nếu có FK (hóa đơn, ca...) → soft delete
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2003'
+      ) {
         const softDeletedStaff = await this.prisma.staff.update({
           where: { id },
           data: {
-            status: 'inactive', // Vô hiệu hóa tài khoản
+            status: 'inactive',
             updatedAt: new Date(),
           },
         });
         return this.toSafe(softDeletedStaff);
       }
-      
-      // Nếu không phải lỗi P2003, ném cho hàm handleError xử lý
+
       this.handleError(e);
     }
   }

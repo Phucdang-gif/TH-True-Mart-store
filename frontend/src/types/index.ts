@@ -187,23 +187,39 @@ export interface Supplier {
   status: SupplierStatus;
 }
 
+export interface PurchaseOrderItem {
+  id: string;
+  purchaseOrderId: string;
+  productId: string;
+  quantity: number;
+  unitPrice: string;   // Decimal(12,2) -> string
+  subtotal: string;    // Decimal(12,2) -> string
+
+  products: {
+    id: string;
+    code: string;
+    name: string;
+    unit: string;
+  };
+}
+
 export interface PurchaseOrder {
   id: string;
   orderCode: string;
   supplierId: string;
-  supplierName: string; // KHÔNG có trong bảng purchase_orders: backend phải include suppliers rồi gộp vào
   createdAt: string;
   expectedDate: string;
-  items: {
-    productId: string;
-    productName: string; // KHÔNG có trong purchase_order_items: backend phải include products
-    quantity: number;
-    unitPrice: number;
-    subtotal: number;
-  }[];
-  totalAmount: number;
+  totalAmount: string;   // Decimal(14,2) -> string
   status: PurchaseOrderStatus;
-  notes?: string;
+  notes?: string | null;
+
+  suppliers?: {
+    id: string;
+    code: string;
+    name: string;
+    phone?: string | null;
+  };
+  purchase_order_items?: PurchaseOrderItem[];
 }
 
 export interface StockAuditItem {

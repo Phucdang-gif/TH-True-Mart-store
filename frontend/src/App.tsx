@@ -10,10 +10,8 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import Login from "./components/login/Login";
 import {
   INITIAL_BATCHES,
-  INITIAL_STAFF,
   INITIAL_PROMOTIONS,
   INITIAL_INVOICES,
-  INITIAL_PURCHASE_ORDERS,
 } from "./data/initialData";
 import {
   Batch,
@@ -27,6 +25,7 @@ import {
 import { useSuppliers } from "./hooks/useSuppliers";
 import { useProducts } from "./hooks/useProducts";
 import { useStaff } from "./hooks/useStaff";
+import { usePurchaseOrders } from "./hooks/usePurchaseOrders";
 
 export default function App() {
   const [activeModule, setActiveModule] = useState<number>(1); // 1 to 6
@@ -35,15 +34,19 @@ export default function App() {
   const { suppliers, addSupplier, updateSupplier, removeSupplier } =
     useSuppliers();
   const { products, addProduct, updateProductPrice } = useProducts();
-  const { staffList, addStaff, updateShift } = useStaff();
+  const { staffList, addStaff, updateShift, removeStaff, changePassword } =
+    useStaff();
+  const {
+    purchaseOrders,
+    addPurchaseOrder,
+    updatePurchaseOrderStatus,
+    removePurchaseOrder,
+  } = usePurchaseOrders();
   // ===== Dữ liệu tạm (dữ liệu giả, sẽ nối API ở các module sau) =====
   const [batches, setBatches] = useState<Batch[]>(INITIAL_BATCHES);
 
   const [promotions, setPromotions] = useState<Promotion[]>(INITIAL_PROMOTIONS);
   const [invoices, setInvoices] = useState<Invoice[]>(INITIAL_INVOICES);
-  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>(
-    INITIAL_PURCHASE_ORDERS,
-  );
   const [stockAudits, setStockAudits] = useState<StockAudit[]>([]);
 
   // Nhân viên đang thao tác. TODO: thay bằng tài khoản đăng nhập (auth_sessions) khi có màn hình đăng nhập.
@@ -194,10 +197,6 @@ export default function App() {
     }
   };
 
-  const handleCreatePurchaseOrder = (newPO: PurchaseOrder) => {
-    setPurchaseOrders((prev) => [newPO, ...prev]);
-  };
-
   const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
     const token = localStorage.getItem("access_token");
     if (!token) {
@@ -267,6 +266,8 @@ export default function App() {
                       staffList={staffList}
                       onAddStaff={addStaff}
                       onUpdateShift={updateShift}
+                      onDeleteStaff={removeStaff}
+                      onChangePassword={changePassword}
                     />
                   )}
 
@@ -278,7 +279,9 @@ export default function App() {
                       onAddSupplier={addSupplier}
                       onUpdateSupplier={updateSupplier}
                       onDeleteSupplier={removeSupplier}
-                      onCreatePurchaseOrder={handleCreatePurchaseOrder}
+                      onCreatePurchaseOrder={addPurchaseOrder}
+                      onUpdatePurchaseOrderStatus={updatePurchaseOrderStatus}
+                      onDeletePurchaseOrder={removePurchaseOrder}
                     />
                   )}
 
