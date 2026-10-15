@@ -9,30 +9,23 @@ import {
   X,
   Edit,
   Trash2,
-  CheckCircle2,
-  Ban,
-  Loader2,
 } from "lucide-react";
-import { Supplier, Product, PurchaseOrder } from "../../types";
+import { Supplier, PurchaseOrder, Product } from "../../types";
 import { SupplierInput } from "../../services/suppliers";
-import { PurchaseOrderInput } from "../../services/purchaseOrders";
-import { toNum, PURCHASE_STATUS_LABELS } from "../../lib/labels";
+import { fetchApi } from "../../lib/api";
 
 interface QuanLyNhaCungCapProps {
   suppliers: Supplier[];
   products: Product[];
   purchaseOrders: PurchaseOrder[];
+  // Các hàm này gọi API rồi mới cập nhật state; nếu API lỗi sẽ ném lỗi (throw)
   onAddSupplier: (data: SupplierInput) => Promise<void>;
   onUpdateSupplier: (id: string, data: Partial<SupplierInput>) => Promise<void>;
   onDeleteSupplier: (id: string) => Promise<void>;
-  onCreatePurchaseOrder: (data: PurchaseOrderInput) => Promise<PurchaseOrder>;
-  onUpdatePurchaseOrderStatus: (
-    id: string,
-    status: "received" | "cancelled",
-  ) => Promise<PurchaseOrder>;
-  onDeletePurchaseOrder: (id: string) => Promise<void>;
+  onCreatePurchaseOrder: (po: PurchaseOrder) => void;
 }
 
+// Giá trị ban đầu của form thêm NCC (mã để trống, người dùng tự nhập)
 const EMPTY_SUPPLIER = {
   code: "",
   name: "",
@@ -53,39 +46,38 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
   onUpdateSupplier,
   onDeleteSupplier,
   onCreatePurchaseOrder,
-  onUpdatePurchaseOrderStatus,
-  onDeletePurchaseOrder,
 }) => {
   const [activeTab, setActiveTab] = useState<"suppliers" | "orders">(
     "suppliers",
   );
   const [search, setSearch] = useState("");
 
+  // Thông báo lỗi dùng chung cho các modal (mỗi lúc chỉ mở một modal)
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  // Loading theo từng PO khi bấm Nhận hàng / Hủy
-  const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
 
   // Modals
   const [showAddSupplierModal, setShowAddSupplierModal] = useState(false);
   const [showCreateOrderModal, setShowCreateOrderModal] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
 
-  // Form thêm NCC
+  // New Supplier State (6.1)
   const [newSup, setNewSup] = useState(EMPTY_SUPPLIER);
 
-  // Form tạo PO
+  // New Purchase Order State (6.2)
   const [selectedSupplierId, setSelectedSupplierId] = useState<string>("");
   const [expectedDate, setExpectedDate] = useState("2026-09-25");
   const [poItems, setPoItems] = useState<
-    { productId: string; quantity: number; unitPrice: number }[]
-  >([{ productId: "", quantity: 50, unitPrice: 0 }]);
+    { productId: string; quantity: number }[]
+  >([{ productId: "", quantity: 50 }]);
   const [poNotes, setPoNotes] = useState("");
 
+  // NCC và sản phẩm tải bất đồng bộ từ API nên lúc khởi tạo state có thể còn rỗng;
+  // dùng giá trị dự phòng là phần tử đầu tiên khi người dùng chưa chọn
   const currentSupplierId = selectedSupplierId || suppliers[0]?.id || "";
   const defaultProductId = products[0]?.id || "";
 
-  // ===== Modal helpers =====
+  // ===== Mở / đóng modal (luôn xóa lỗi cũ) =====
   const openAddModal = () => {
     setError(null);
     setShowAddSupplierModal(true);
@@ -104,13 +96,6 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
   };
   const openOrderModal = () => {
     setError(null);
-    // Reset form mỗi lần mở
-    setSelectedSupplierId(suppliers[0]?.id || "");
-    setExpectedDate(new Date().toISOString().slice(0, 10));
-    setPoItems([
-      { productId: products[0]?.id || "", quantity: 50, unitPrice: 0 },
-    ]);
-    setPoNotes("");
     setShowCreateOrderModal(true);
   };
   const closeOrderModal = () => {
@@ -118,7 +103,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
     setShowCreateOrderModal(false);
   };
 
-  // ===== Lọc NCC =====
+  // ===== Lọc danh sách =====
   const filteredSuppliers = suppliers.filter(
     (s) =>
       s.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -126,7 +111,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
       s.contactPerson.toLowerCase().includes(search.toLowerCase()),
   );
 
-  // ===== Handlers NCC =====
+  // ===== Handlers nhà cung cấp =====
   const handleCreateSupplier = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newSup.name) return;
@@ -136,7 +121,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
     try {
       await onAddSupplier({ ...newSup, status: "active" });
       setShowAddSupplierModal(false);
-      setNewSup(EMPTY_SUPPLIER);
+      setNewSup(EMPTY_SUPPLIER); // reset form cho lần thêm sau
     } catch (err) {
       setError(getErrorMessage(err, "Không lưu được nhà cung cấp"));
     } finally {
@@ -177,85 +162,55 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
     }
   };
 
-  // ===== Handler tạo PO =====
+  // ===== Handler đơn đặt hàng (PO) =====
+  // TODO: chuyển phần gọi API sang services/purchaseOrders.ts khi làm module PO
   const handleCreateOrder = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!currentSupplierId) {
+    const sup = suppliers.find((s) => s.id === currentSupplierId);
+    if (!sup) {
       setError("Chưa có nhà cung cấp để lập đơn");
       return;
     }
 
-    // Chỉ lấy những dòng hợp lệ
-    const validItems = poItems
-      .map((it) => ({
-        productId: it.productId || defaultProductId,
-        quantity: it.quantity,
-        unitPrice: it.unitPrice,
-      }))
-      .filter((it) => it.productId && it.quantity > 0 && it.unitPrice >= 0);
+    const items = poItems.map((item) => {
+      const productId = item.productId || defaultProductId;
+      const prod = products.find((p) => p.id === productId);
+      const unitPrice = prod?.costPrice || 30000;
+      return {
+        productId,
+        productName: prod?.name || "Sản phẩm",
+        quantity: item.quantity,
+        unitPrice,
+        subtotal: unitPrice * item.quantity,
+      };
+    });
 
-    if (validItems.length === 0) {
-      setError("Đơn phải có ít nhất 1 sản phẩm với số lượng > 0");
-      return;
-    }
+    const totalAmount = items.reduce((acc, i) => acc + i.subtotal, 0);
 
-    // Kiểm tra trùng sản phẩm ngay trên frontend cho UX
-    const productIds = validItems.map((i) => i.productId);
-    if (new Set(productIds).size !== productIds.length) {
-      setError("Không được chọn trùng sản phẩm trong cùng một đơn");
-      return;
-    }
-
-    const payload: PurchaseOrderInput = {
-      supplierId: currentSupplierId,
-      expectedDate: new Date(expectedDate).toISOString(),
-      notes: poNotes.trim() || undefined,
-      items: validItems,
+    const payload = {
+      // Backend sẽ tự sinh orderCode và ID
+      supplierId: sup.id,
+      supplierName: sup.name,
+      expectedDate,
+      items,
+      totalAmount,
+      status: "pending",
+      notes: poNotes,
     };
 
     setError(null);
     setSaving(true);
     try {
-      await onCreatePurchaseOrder(payload);
+      const savedPO = await fetchApi<PurchaseOrder>("/api/purchase-orders", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      onCreatePurchaseOrder(savedPO);
       setShowCreateOrderModal(false);
     } catch (err) {
       setError(getErrorMessage(err, "Không tạo được đơn đặt hàng"));
     } finally {
       setSaving(false);
-    }
-  };
-
-  // ===== Handler đổi status PO =====
-  const handleUpdateStatus = async (
-    id: string,
-    status: "received" | "cancelled",
-  ) => {
-    const msg =
-      status === "received"
-        ? "Xác nhận đã nhận hàng? Tồn kho sẽ được cập nhật."
-        : "Hủy đơn nhập hàng này?";
-    if (!window.confirm(msg)) return;
-
-    setBusyOrderId(id);
-    try {
-      await onUpdatePurchaseOrderStatus(id, status);
-    } catch (err) {
-      alert(getErrorMessage(err, "Không cập nhật được trạng thái đơn"));
-    } finally {
-      setBusyOrderId(null);
-    }
-  };
-
-  const handleDeleteOrder = async (id: string) => {
-    if (!window.confirm("Xóa đơn nhập hàng này?")) return;
-    setBusyOrderId(id);
-    try {
-      await onDeletePurchaseOrder(id);
-    } catch (err) {
-      alert(getErrorMessage(err, "Không xóa được đơn"));
-    } finally {
-      setBusyOrderId(null);
     }
   };
 
@@ -299,8 +254,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
         ) : (
           <button
             onClick={openOrderModal}
-            disabled={suppliers.length === 0 || products.length === 0}
-            className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors shadow-xs disabled:opacity-50"
+            className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors shadow-xs"
           >
             <Plus className="w-4 h-4" />
             <span>Lập đơn đặt hàng (PO) mới</span>
@@ -308,7 +262,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
         )}
       </div>
 
-      {/* 6.1: Suppliers */}
+      {/* 6.1: Suppliers Cards */}
       {activeTab === "suppliers" && (
         <div className="space-y-4">
           <div className="relative w-80">
@@ -382,7 +336,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
         </div>
       )}
 
-      {/* 6.2: Purchase Orders */}
+      {/* 6.2: Purchase Orders List */}
       {activeTab === "orders" && (
         <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-4">
           <div className="flex items-center justify-between border-b border-slate-200 pb-3">
@@ -397,125 +351,60 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
             </div>
           </div>
 
-          {purchaseOrders.length === 0 && (
-            <p className="text-xs text-slate-500 italic py-6 text-center">
-              Chưa có đơn nhập hàng nào. Bấm "Lập đơn đặt hàng (PO) mới" để bắt
-              đầu.
-            </p>
-          )}
-
           <div className="space-y-3">
-            {purchaseOrders.map((po) => {
-              const isPending = po.status === "pending";
-              const isBusy = busyOrderId === po.id;
-
-              return (
-                <div
-                  key={po.id}
-                  className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-3 text-xs"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-bold text-sm text-[#004885]">
-                        {po.orderCode}
-                      </span>
-                      <span className="text-slate-400">•</span>
-                      <span className="font-semibold text-slate-900">
-                        {po.suppliers?.name ?? "—"}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] text-slate-500">
-                        Dự kiến nhận:{" "}
-                        <strong className="text-slate-800">
-                          {po.expectedDate?.slice(0, 10) ?? "—"}
-                        </strong>
-                      </span>
-                      <span
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                          po.status === "pending"
-                            ? "bg-amber-100 text-amber-800"
-                            : po.status === "received"
-                              ? "bg-emerald-100 text-emerald-800"
-                              : "bg-rose-100 text-rose-700"
-                        }`}
-                      >
-                        {PURCHASE_STATUS_LABELS[po.status]}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    {(po.purchase_order_items ?? []).map((item) => (
-                      <div
-                        key={item.id}
-                        className="flex justify-between text-slate-700"
-                      >
-                        <span>
-                          • {item.products?.name ?? "—"} (Số lượng:{" "}
-                          <strong>{item.quantity}</strong>)
-                        </span>
-                        <span className="font-semibold">
-                          {toNum(item.subtotal).toLocaleString("vi-VN")} đ
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="flex justify-between items-center border-t border-slate-200 pt-2 font-bold text-xs">
-                    <span className="text-slate-600">
-                      Tổng giá trị đơn hàng:
+            {purchaseOrders.map((po) => (
+              <div
+                key={po.id}
+                className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-3 text-xs"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono font-bold text-sm text-[#004885]">
+                      {po.orderCode}
                     </span>
-                    <span className="text-sm text-[#004885]">
-                      {toNum(po.totalAmount).toLocaleString("vi-VN")} đ
+                    <span className="text-slate-400">•</span>
+                    <span className="font-semibold text-slate-900">
+                      {po.supplierName}
                     </span>
                   </div>
-
-                  {po.notes && (
-                    <p className="text-[11px] text-slate-500 italic border-l-2 border-slate-200 pl-2">
-                      Ghi chú: {po.notes}
-                    </p>
-                  )}
-
-                  {isPending && (
-                    <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
-                      <button
-                        onClick={() => handleUpdateStatus(po.id, "cancelled")}
-                        disabled={isBusy}
-                        className="flex items-center gap-1 px-3 py-1.5 text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg font-bold disabled:opacity-60"
-                      >
-                        {isBusy ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <Ban className="w-3.5 h-3.5" />
-                        )}
-                        <span>Hủy đơn</span>
-                      </button>
-                      <button
-                        onClick={() => handleUpdateStatus(po.id, "received")}
-                        disabled={isBusy}
-                        className="flex items-center gap-1 px-3 py-1.5 text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg font-bold disabled:opacity-60"
-                      >
-                        {isBusy ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                        )}
-                        <span>Nhận hàng</span>
-                      </button>
-                      <button
-                        onClick={() => handleDeleteOrder(po.id)}
-                        disabled={isBusy}
-                        className="flex items-center gap-1 px-2.5 py-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 rounded-lg font-bold disabled:opacity-60"
-                        title="Xóa đơn"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  )}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-slate-500">
+                      Dự kiến nhận:{" "}
+                      <strong className="text-slate-800">
+                        {po.expectedDate}
+                      </strong>
+                    </span>
+                    <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                      Chờ tiếp nhận kho
+                    </span>
+                  </div>
                 </div>
-              );
-            })}
+
+                <div className="space-y-1">
+                  {po.items.map((item, idx) => (
+                    <div
+                      key={idx}
+                      className="flex justify-between text-slate-700"
+                    >
+                      <span>
+                        • {item.productName} (Số lượng:{" "}
+                        <strong>{item.quantity}</strong>)
+                      </span>
+                      <span className="font-semibold">
+                        {item.subtotal.toLocaleString("vi-VN")} đ
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex justify-between items-center border-t border-slate-200 pt-2 font-bold text-xs">
+                  <span className="text-slate-600">Tổng giá trị đơn hàng:</span>
+                  <span className="text-sm text-[#004885]">
+                    {po.totalAmount.toLocaleString("vi-VN")} đ
+                  </span>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -787,145 +676,50 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                 />
               </div>
 
-              {/* Items */}
+              {/* Items in PO */}
               <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="font-bold text-slate-700">
-                    Sản phẩm, số lượng & đơn giá nhập
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setPoItems((prev) => [
-                        ...prev,
-                        {
-                          productId: defaultProductId,
-                          quantity: 10,
-                          unitPrice: 0,
-                        },
-                      ])
-                    }
-                    className="flex items-center gap-1 text-[11px] font-bold text-emerald-700 hover:text-emerald-800"
-                  >
-                    <Plus className="w-3 h-3" />
-                    Thêm dòng
-                  </button>
-                </div>
-
+                <label className="font-bold text-slate-700 block mb-1">
+                  Sản phẩm & Số lượng đặt
+                </label>
                 <div className="space-y-2">
-                  {poItems.map((item, idx) => {
-                    const lineTotal = item.quantity * item.unitPrice;
-                    return (
-                      <div
-                        key={idx}
-                        className="p-2 bg-slate-50 border border-slate-200 rounded-lg space-y-2"
+                  {poItems.map((item, idx) => (
+                    <div key={idx} className="flex gap-2">
+                      <select
+                        value={item.productId || defaultProductId}
+                        onChange={(e) => {
+                          const updated = [...poItems];
+                          updated[idx] = {
+                            ...updated[idx],
+                            productId: e.target.value,
+                          };
+                          setPoItems(updated);
+                        }}
+                        className="flex-1 p-2 bg-slate-50 border border-slate-200 rounded-lg"
                       >
-                        {/* Hàng 1: chọn sản phẩm + nút xóa */}
-                        <div className="flex gap-2 items-center">
-                          <select
-                            value={item.productId || defaultProductId}
-                            onChange={(e) => {
-                              const newProductId = e.target.value;
-                              const prod = products.find(
-                                (p) => p.id === newProductId,
-                              );
-                              const updated = [...poItems];
-                              updated[idx] = {
-                                ...updated[idx],
-                                productId: newProductId,
-                                unitPrice: prod?.costPrice ?? 0,
-                              };
-                              setPoItems(updated);
-                            }}
-                            className="flex-1 min-w-0 p-2 bg-white border border-slate-200 rounded-lg text-xs"
-                          >
-                            {products.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.name} ({p.unit})
-                              </option>
-                            ))}
-                          </select>
-
-                          {poItems.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setPoItems((prev) =>
-                                  prev.filter((_, i) => i !== idx),
-                                )
-                              }
-                              className="p-2 text-slate-400 hover:text-red-600 shrink-0"
-                              title="Xóa dòng"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-
-                        {/* Hàng 2: số lượng + đơn giá + thành tiền */}
-                        <div className="grid grid-cols-3 gap-2">
-                          <div>
-                            <label className="text-[10px] text-slate-500 font-bold block mb-0.5">
-                              Số lượng
-                            </label>
-                            <input
-                              type="number"
-                              min="1"
-                              value={item.quantity}
-                              onChange={(e) => {
-                                const updated = [...poItems];
-                                updated[idx] = {
-                                  ...updated[idx],
-                                  quantity: Number(e.target.value),
-                                };
-                                setPoItems(updated);
-                              }}
-                              className="w-full p-2 bg-white border border-slate-200 rounded-lg text-right font-bold text-xs"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] text-slate-500 font-bold block mb-0.5">
-                              Đơn giá (đ)
-                            </label>
-                            <input
-                              type="number"
-                              min="0"
-                              step="100"
-                              value={item.unitPrice}
-                              onChange={(e) => {
-                                const updated = [...poItems];
-                                updated[idx] = {
-                                  ...updated[idx],
-                                  unitPrice: Number(e.target.value),
-                                };
-                                setPoItems(updated);
-                              }}
-                              className="w-full p-2 bg-white border border-slate-200 rounded-lg text-right font-mono text-xs"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] text-slate-500 font-bold block mb-0.5">
-                              Thành tiền
-                            </label>
-                            <div className="w-full p-2 bg-slate-100 border border-slate-200 rounded-lg text-right font-bold text-xs text-[#004885]">
-                              {lineTotal.toLocaleString("vi-VN")}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                        {products.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name} ({p.unit})
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        min="1"
+                        value={item.quantity}
+                        onChange={(e) => {
+                          const updated = [...poItems];
+                          updated[idx] = {
+                            ...updated[idx],
+                            quantity: Number(e.target.value),
+                          };
+                          setPoItems(updated);
+                        }}
+                        className="w-24 p-2 bg-slate-50 border border-slate-200 rounded-lg text-right font-bold"
+                        placeholder="Số lượng"
+                      />
+                    </div>
+                  ))}
                 </div>
-
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Tổng tạm tính:{" "}
-                  <strong className="text-[#004885]">
-                    {poItems
-                      .reduce((sum, it) => sum + it.quantity * it.unitPrice, 0)
-                      .toLocaleString("vi-VN")}{" "}
-                    đ
-                  </strong>
-                </p>
               </div>
 
               <div>

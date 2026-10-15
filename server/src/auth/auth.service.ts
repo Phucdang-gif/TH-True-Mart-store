@@ -39,7 +39,6 @@ export class AuthService {
     return {
       user: userWithoutPassword,
       access_token: await this.jwtService.signAsync(payload),
-      mustChangePassword: user.mustChangePassword,
     };
   }
 }

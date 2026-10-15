@@ -1,53 +1,34 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Query,
-} from '@nestjs/common';
-import { CreatePurchaseOrderDto } from './dto/create-purchase_order.dto';
-import { QueryPurchaseOrderDto } from './dto/query-purchase_order.dto';
-import { UpdatePurchaseOrderStatusDto } from './dto/update-purchase_order-status.dto';
-import { UpdatePurchaseOrderDto } from './dto/update-purchase_order.dto';
+import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
 import { PurchaseOrdersService } from './purchase_orders.service';
+import { CreatePurchaseOrderDto } from './dto/create-purchase_order.dto';
+import { UpdatePurchaseOrderDto } from './dto/update-purchase_order.dto';
 
 @Controller('purchase-orders')
 export class PurchaseOrdersController {
-  constructor(private readonly service: PurchaseOrdersService) {}
+  constructor(private readonly purchaseOrdersService: PurchaseOrdersService) {}
 
   @Post()
-  create(@Body() dto: CreatePurchaseOrderDto) {
-    return this.service.create(dto);
+  create(@Body() createPurchaseOrderDto: CreatePurchaseOrderDto) {
+    return this.purchaseOrdersService.create(createPurchaseOrderDto);
   }
 
   @Get()
-  findAll(@Query() query: QueryPurchaseOrderDto) {
-    return this.service.findAll(query);
+  findAll() {
+    return this.purchaseOrdersService.findAll();
   }
 
   @Get(':id')
   findOne(@Param('id') id: string) {
-    return this.service.findOne(id);
+    return this.purchaseOrdersService.findOne(+id);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdatePurchaseOrderDto) {
-    return this.service.update(id, dto);
-  }
-
-  @Patch(':id/status')
-  updateStatus(
-    @Param('id') id: string,
-    @Body() dto: UpdatePurchaseOrderStatusDto,
-  ) {
-    return this.service.updateStatus(id, dto);
+  update(@Param('id') id: string, @Body() updatePurchaseOrderDto: UpdatePurchaseOrderDto) {
+    return this.purchaseOrdersService.update(+id, updatePurchaseOrderDto);
   }
 
   @Delete(':id')
   remove(@Param('id') id: string) {
-    return this.service.remove(id);
+    return this.purchaseOrdersService.remove(+id);
   }
 }
