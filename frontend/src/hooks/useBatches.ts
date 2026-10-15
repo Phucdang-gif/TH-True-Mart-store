@@ -15,6 +15,11 @@ export function useBatches() {
       .finally(() => setLoading(false));
   }, []);
 
+  // Tải lại tồn kho từ server (sau khi bán hàng / đổi trả làm thay đổi số lượng lô)
+  const refresh = async () => {
+    setBatches(await batchesApi.getAll());
+  };
+
   const addBatch = async (data: Omit<Batch, "id">) => {
     const created = await batchesApi.create(data);
     setBatches((prev) => [created, ...prev]); 
@@ -31,6 +36,7 @@ export function useBatches() {
     loading, 
     error, 
     addBatch, 
-    adjustStock 
+    adjustStock,
+    refresh,
   };
 }

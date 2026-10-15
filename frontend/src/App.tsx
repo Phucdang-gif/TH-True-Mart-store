@@ -8,24 +8,18 @@ import { QuanLyNhaCungCap } from "./components/suppliers/QuanLyNhaCungCap";
 import { BaoCaoThongKe } from "./components/reports/BaoCaoThongKe";
 import { Routes, Route, Navigate } from "react-router-dom";
 import Login from "./components/login/Login";
-import {
-  INITIAL_BATCHES,
-  INITIAL_PROMOTIONS,
-  INITIAL_INVOICES,
-} from "./data/initialData";
-import {
-  Batch,
-  Staff,
-  Promotion,
-  Invoice,
-  InvoiceApproval,
-  PurchaseOrder,
-  StockAudit,
-} from "./types";
+import { INITIAL_PROMOTIONS } from "./data/initialData";
+import { Batch, Staff, Promotion, PurchaseOrder, StockAudit } from "./types";
+import type {
+  ApprovalPayload,
+  CreateInvoicePayload,
+} from "./services/invoices";
 import { useSuppliers } from "./hooks/useSuppliers";
 import { useProducts } from "./hooks/useProducts";
 import { useStaff } from "./hooks/useStaff";
 import { usePurchaseOrders } from "./hooks/usePurchaseOrders";
+import { useBatches } from "./hooks/useBatches";
+import { useInvoices } from "./hooks/useInvoices";
 
 export default function App() {
   const [activeModule, setActiveModule] = useState<number>(1); // 1 to 6
@@ -42,11 +36,17 @@ export default function App() {
     updatePurchaseOrderStatus,
     removePurchaseOrder,
   } = usePurchaseOrders();
-  // ===== Dữ liệu tạm (dữ liệu giả, sẽ nối API ở các module sau) =====
-  const [batches, setBatches] = useState<Batch[]>(INITIAL_BATCHES);
+  // Lô hàng + hóa đơn đã nối API (bán hàng / đổi trả trừ và hoàn kho thật trên server)
+  const {
+    batches,
+    setBatches,
+    refresh: refreshBatches,
+  } = useBatches();
+  const { invoices, createInvoice, returnInvoice, cancelInvoice } =
+    useInvoices();
 
+  // ===== Dữ liệu tạm (dữ liệu giả, sẽ nối API ở các module sau) =====
   const [promotions, setPromotions] = useState<Promotion[]>(INITIAL_PROMOTIONS);
-  const [invoices, setInvoices] = useState<Invoice[]>(INITIAL_INVOICES);
   const [stockAudits, setStockAudits] = useState<StockAudit[]>([]);
 
   // Nhân viên đang thao tác. TODO: thay bằng tài khoản đăng nhập (auth_sessions) khi có màn hình đăng nhập.
@@ -68,85 +68,23 @@ export default function App() {
   }).length;
 
   // Handlers
-  // 1. Transaction handler: POS completed invoice -> deduct batch (FIFO)
-  const handleCreateInvoice = (newInvoice: Invoice) => {
-    setInvoices((prev) => [newInvoice, ...prev]);
-
-    // FIFO inventory deduction
-    setBatches((prevBatches) => {
-      const updated = [...prevBatches];
-      newInvoice.items.forEach((cartItem) => {
-        let remainingToDeduct = cartItem.quantity;
-        // find batches for this product sorted by expiryDate ascending (FIFO)
-        const relevantBatches = updated
-          .filter((b) => b.productId === cartItem.productId && b.quantity > 0)
-          .sort(
-            (a, b) =>
-              new Date(a.expiryDate).getTime() -
-              new Date(b.expiryDate).getTime(),
-          );
-
-        for (const b of relevantBatches) {
-          if (remainingToDeduct <= 0) break;
-          if (b.quantity >= remainingToDeduct) {
-            b.quantity -= remainingToDeduct;
-            remainingToDeduct = 0;
-          } else {
-            remainingToDeduct -= b.quantity;
-            b.quantity = 0;
-          }
-        }
-      });
-      return updated;
-    });
+  // 1. Bán hàng / đổi trả: server lập hóa đơn, trừ hoặc hoàn tồn kho theo lô, ghi thanh toán.
+  // Sau mỗi thao tác tải lại lô hàng để màn hình thấy tồn kho mới.
+  const handleCreateInvoice = async (payload: CreateInvoicePayload) => {
+    const created = await createInvoice(payload);
+    await refreshBatches().catch(() => {});
+    return created;
   };
 
-  // Đổi trả / hủy hóa đơn: quản lý duyệt (invoice_approvals) + hoàn tồn kho
-  type ApprovalInput = Omit<InvoiceApproval, "id" | "createdAt" | "action">;
-
-  const restoreStock = (invoice: Invoice) => {
-    setBatches((prev) =>
-      prev.map((b) => {
-        const item = invoice.items.find((i) =>
-          i.batchId ? i.batchId === b.id : i.productId === b.productId,
-        );
-        return item ? { ...b, quantity: b.quantity + item.quantity } : b;
-      }),
-    );
+  const handleReturnInvoice = async (id: string, input: ApprovalPayload) => {
+    await returnInvoice(id, input);
+    await refreshBatches().catch(() => {});
   };
 
-  const applyApproval = (
-    invoiceId: string,
-    action: "return" | "cancel",
-    input: ApprovalInput,
-  ) => {
-    const target = invoices.find((inv) => inv.id === invoiceId);
-    if (!target) return;
-    const approval: InvoiceApproval = {
-      ...input,
-      id: `appr-${Date.now()}`,
-      action,
-      createdAt: new Date().toLocaleString("vi-VN"),
-    };
-    setInvoices((prev) =>
-      prev.map((inv) =>
-        inv.id === invoiceId
-          ? {
-              ...inv,
-              status: action === "return" ? "returned" : "cancelled",
-              approvals: [...(inv.approvals || []), approval],
-              notes: `${inv.notes || ""} [${action === "return" ? "Đã trả hàng" : "Đã hủy"}: ${input.reason}]`,
-            }
-          : inv,
-      ),
-    );
-    restoreStock(target);
+  const handleCancelInvoice = async (id: string, input: ApprovalPayload) => {
+    await cancelInvoice(id, input);
+    await refreshBatches().catch(() => {});
   };
-
-  const handleReturnInvoice = (invoiceId: string, input: ApprovalInput) =>
-    applyApproval(invoiceId, "return", input);
-  const handleCancelInvoice = (invoiceId: string, input: ApprovalInput) =>
-    applyApproval(invoiceId, "cancel", input);
 
   // 2. Promotion handler (TODO: nối API khi làm module khuyến mãi)
   const handleAddPromotion = (newPromo: Promotion) => {
@@ -230,7 +168,6 @@ export default function App() {
                       products={products}
                       batches={batches}
                       currentStaff={currentStaff}
-                      promotions={promotions}
                       invoices={invoices}
                       onCompleteSale={handleCreateInvoice}
                       onReturnInvoice={handleReturnInvoice}

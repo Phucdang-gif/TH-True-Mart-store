@@ -10,8 +10,11 @@ export async function fetchApi<T>(
   options: RequestInit = {}
 ): Promise<T> {
   // Tự động thiết lập Content-Type là JSON
+  // Gắn token đăng nhập (nếu có) để gọi các API cần xác thực như /api/invoices
+  const token = localStorage.getItem('access_token');
   const headers = {
     'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...options.headers,
   };
 

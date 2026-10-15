@@ -1,0 +1,2417 @@
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 0919e8a..0d636aa 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -8,24 +8,18 @@ import { QuanLyNhaCungCap } from "./components/suppliers/QuanLyNhaCungCap";
+ import { BaoCaoThongKe } from "./components/reports/BaoCaoThongKe";
+ import { Routes, Route, Navigate } from "react-router-dom";
+ import Login from "./components/login/Login";
+-import {
+-  INITIAL_BATCHES,
+-  INITIAL_PROMOTIONS,
+-  INITIAL_INVOICES,
+-} from "./data/initialData";
+-import {
+-  Batch,
+-  Staff,
+-  Promotion,
+-  Invoice,
+-  InvoiceApproval,
+-  PurchaseOrder,
+-  StockAudit,
+-} from "./types";
++import { INITIAL_PROMOTIONS } from "./data/initialData";
++import { Batch, Staff, Promotion, PurchaseOrder, StockAudit } from "./types";
++import type {
++  ApprovalPayload,
++  CreateInvoicePayload,
++} from "./services/invoices";
+ import { useSuppliers } from "./hooks/useSuppliers";
+ import { useProducts } from "./hooks/useProducts";
+ import { useStaff } from "./hooks/useStaff";
+ import { usePurchaseOrders } from "./hooks/usePurchaseOrders";
++import { useBatches } from "./hooks/useBatches";
++import { useInvoices } from "./hooks/useInvoices";
+ 
+ export default function App() {
+   const [activeModule, setActiveModule] = useState<number>(1); // 1 to 6
+@@ -42,11 +36,17 @@ export default function App() {
+     updatePurchaseOrderStatus,
+     removePurchaseOrder,
+   } = usePurchaseOrders();
+-  // ===== Dữ liệu tạm (dữ liệu giả, sẽ nối API ở các module sau) =====
+-  const [batches, setBatches] = useState<Batch[]>(INITIAL_BATCHES);
++  // Lô hàng + hóa đơn đã nối API (bán hàng / đổi trả trừ và hoàn kho thật trên server)
++  const {
++    batches,
++    setBatches,
++    refresh: refreshBatches,
++  } = useBatches();
++  const { invoices, createInvoice, returnInvoice, cancelInvoice } =
++    useInvoices();
+ 
++  // ===== Dữ liệu tạm (dữ liệu giả, sẽ nối API ở các module sau) =====
+   const [promotions, setPromotions] = useState<Promotion[]>(INITIAL_PROMOTIONS);
+-  const [invoices, setInvoices] = useState<Invoice[]>(INITIAL_INVOICES);
+   const [stockAudits, setStockAudits] = useState<StockAudit[]>([]);
+ 
+   // Nhân viên đang thao tác. TODO: thay bằng tài khoản đăng nhập (auth_sessions) khi có màn hình đăng nhập.
+@@ -68,86 +68,24 @@ export default function App() {
+   }).length;
+ 
+   // Handlers
+-  // 1. Transaction handler: POS completed invoice -> deduct batch (FIFO)
+-  const handleCreateInvoice = (newInvoice: Invoice) => {
+-    setInvoices((prev) => [newInvoice, ...prev]);
+-
+-    // FIFO inventory deduction
+-    setBatches((prevBatches) => {
+-      const updated = [...prevBatches];
+-      newInvoice.items.forEach((cartItem) => {
+-        let remainingToDeduct = cartItem.quantity;
+-        // find batches for this product sorted by expiryDate ascending (FIFO)
+-        const relevantBatches = updated
+-          .filter((b) => b.productId === cartItem.productId && b.quantity > 0)
+-          .sort(
+-            (a, b) =>
+-              new Date(a.expiryDate).getTime() -
+-              new Date(b.expiryDate).getTime(),
+-          );
+-
+-        for (const b of relevantBatches) {
+-          if (remainingToDeduct <= 0) break;
+-          if (b.quantity >= remainingToDeduct) {
+-            b.quantity -= remainingToDeduct;
+-            remainingToDeduct = 0;
+-          } else {
+-            remainingToDeduct -= b.quantity;
+-            b.quantity = 0;
+-          }
+-        }
+-      });
+-      return updated;
+-    });
++  // 1. Bán hàng / đổi trả: server lập hóa đơn, trừ hoặc hoàn tồn kho theo lô, ghi thanh toán.
++  // Sau mỗi thao tác tải lại lô hàng để màn hình thấy tồn kho mới.
++  const handleCreateInvoice = async (payload: CreateInvoicePayload) => {
++    const created = await createInvoice(payload);
++    await refreshBatches().catch(() => {});
++    return created;
+   };
+ 
+-  // Đổi trả / hủy hóa đơn: quản lý duyệt (invoice_approvals) + hoàn tồn kho
+-  type ApprovalInput = Omit<InvoiceApproval, "id" | "createdAt" | "action">;
+-
+-  const restoreStock = (invoice: Invoice) => {
+-    setBatches((prev) =>
+-      prev.map((b) => {
+-        const item = invoice.items.find((i) =>
+-          i.batchId ? i.batchId === b.id : i.productId === b.productId,
+-        );
+-        return item ? { ...b, quantity: b.quantity + item.quantity } : b;
+-      }),
+-    );
++  const handleReturnInvoice = async (id: string, input: ApprovalPayload) => {
++    await returnInvoice(id, input);
++    await refreshBatches().catch(() => {});
+   };
+ 
+-  const applyApproval = (
+-    invoiceId: string,
+-    action: "return" | "cancel",
+-    input: ApprovalInput,
+-  ) => {
+-    const target = invoices.find((inv) => inv.id === invoiceId);
+-    if (!target) return;
+-    const approval: InvoiceApproval = {
+-      ...input,
+-      id: `appr-${Date.now()}`,
+-      action,
+-      createdAt: new Date().toLocaleString("vi-VN"),
+-    };
+-    setInvoices((prev) =>
+-      prev.map((inv) =>
+-        inv.id === invoiceId
+-          ? {
+-              ...inv,
+-              status: action === "return" ? "returned" : "cancelled",
+-              approvals: [...(inv.approvals || []), approval],
+-              notes: `${inv.notes || ""} [${action === "return" ? "Đã trả hàng" : "Đã hủy"}: ${input.reason}]`,
+-            }
+-          : inv,
+-      ),
+-    );
+-    restoreStock(target);
++  const handleCancelInvoice = async (id: string, input: ApprovalPayload) => {
++    await cancelInvoice(id, input);
++    await refreshBatches().catch(() => {});
+   };
+ 
+-  const handleReturnInvoice = (invoiceId: string, input: ApprovalInput) =>
+-    applyApproval(invoiceId, "return", input);
+-  const handleCancelInvoice = (invoiceId: string, input: ApprovalInput) =>
+-    applyApproval(invoiceId, "cancel", input);
+-
+   // 2. Promotion handler (TODO: nối API khi làm module khuyến mãi)
+   const handleAddPromotion = (newPromo: Promotion) => {
+     setPromotions((prev) => [...prev, newPromo]);
+@@ -230,7 +168,6 @@ export default function App() {
+                       products={products}
+                       batches={batches}
+                       currentStaff={currentStaff}
+-                      promotions={promotions}
+                       invoices={invoices}
+                       onCompleteSale={handleCreateInvoice}
+                       onReturnInvoice={handleReturnInvoice}
+diff --git a/frontend/src/components/pos/BanHangPOS.tsx b/frontend/src/components/pos/BanHangPOS.tsx
+index 48364c7..485879c 100644
+--- a/frontend/src/components/pos/BanHangPOS.tsx
++++ b/frontend/src/components/pos/BanHangPOS.tsx
+@@ -1,14 +1,11 @@
+-import React, { useState } from "react";
++import React, { useEffect, useRef, useState } from "react";
+ import {
+   Search,
+-  Barcode,
+   Plus,
+   Minus,
+   Trash2,
+-  CreditCard,
+   Banknote,
+   QrCode,
+-  Sparkles,
+   Tag,
+   RotateCcw,
+   XCircle,
+@@ -18,10 +15,7 @@ import {
+ import {
+   Product,
+   Batch,
+-  Promotion,
+   Invoice,
+-  InvoicePayment,
+-  InvoiceApproval,
+   CartItem,
+   Staff,
+   PaymentMethod,
+@@ -32,29 +26,48 @@ import {
+   INVOICE_STATUS_LABELS,
+   PAYMENT_METHOD_LABELS,
+ } from "../../lib/labels";
++import {
++  ApprovalPayload,
++  CreateInvoicePayload,
++  InvoicePreview,
++  PaymentPayload,
++  invoicesApi,
++} from "../../services/invoices";
++import { InvoiceModal } from "../InvoiceModal";
+ 
+ interface BanHangPOSProps {
+   products: Product[];
+   batches: Batch[];
+   currentStaff: Staff; // nhân viên đang đăng nhập (thu ngân / quản lý)
+-  promotions: Promotion[];
+   invoices: Invoice[];
+-  onCompleteSale: (invoice: Invoice) => void;
+-  onReturnInvoice: (
+-    invoiceId: string,
+-    approval: Omit<InvoiceApproval, "id" | "createdAt" | "action">,
+-  ) => void;
+-  onCancelInvoice: (
+-    invoiceId: string,
+-    approval: Omit<InvoiceApproval, "id" | "createdAt" | "action">,
+-  ) => void;
++  // Lập hóa đơn: server tính tiền, trừ kho, ghi thanh toán rồi trả hóa đơn hoàn chỉnh
++  onCompleteSale: (payload: CreateInvoicePayload) => Promise<Invoice>;
++  // Đổi trả / hủy: chỉ quản lý (server kiểm tra quyền)
++  onReturnInvoice: (invoiceId: string, approval: ApprovalPayload) => Promise<void>;
++  onCancelInvoice: (invoiceId: string, approval: ApprovalPayload) => Promise<void>;
+ }
+ 
++// Bỏ dấu tiếng Việt để tìm "sua chua" ra "Sữa chua"
++const normalizeText = (s: string) =>
++  s
++    .normalize("NFD")
++    .replace(/[\u0300-\u036f]/g, "")
++    .replace(/đ/g, "d")
++    .replace(/Đ/g, "D")
++    .toLowerCase();
++
++// Giảm giá riêng của sản phẩm trên 1 đơn vị (khớp công thức ở server: làm tròn VND)
++const unitDiscountOf = (p: Product) =>
++  p.discountPercent && p.discountPercent > 0
++    ? Math.round((p.sellingPrice * p.discountPercent) / 100)
++    : 0;
++
++const errMsg = (e: unknown) => (e instanceof Error ? e.message : "Đã có lỗi xảy ra");
++
+ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+   products,
+   batches,
+   currentStaff,
+-  promotions,
+   invoices,
+   onCompleteSale,
+   onReturnInvoice,
+@@ -64,11 +77,13 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+   const [searchQuery, setSearchQuery] = useState("");
+   const [selectedCategory, setSelectedCategory] = useState<string>("all");
+   const [cart, setCart] = useState<CartItem[]>([]);
+-  const [barcodeInput, setBarcodeInput] = useState("");
+ 
+-  // Promotion state
++  // Khuyến mãi: mã đang áp dụng; số tiền giảm do server tính (preview)
+   const [promoCode, setPromoCode] = useState("");
+-  const [appliedPromo, setAppliedPromo] = useState<Promotion | null>(null);
++  const [appliedCode, setAppliedCode] = useState<string | null>(null);
++  const [preview, setPreview] = useState<InvoicePreview | null>(null);
++  const [isPricing, setIsPricing] = useState(false);
++  const previewSeq = useRef(0); // bỏ qua kết quả tính giá cũ khi giỏ hàng đổi liên tục
+ 
+   // Payment state: thanh toán nhiều hình thức (bảng invoice_payments)
+   const [cashGiven, setCashGiven] = useState<number>(0);
+@@ -77,6 +92,10 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+   const [cardAmount, setCardAmount] = useState<number>(0);
+   const [cardRef, setCardRef] = useState("");
+   const [notes, setNotes] = useState("");
++  const [isSubmitting, setIsSubmitting] = useState(false);
++
++  // Hóa đơn vừa lập / đang xem (InvoiceModal)
++  const [viewInvoice, setViewInvoice] = useState<Invoice | null>(null);
+ 
+   // Return / Cancel modal state
+   const [selectedInvoiceForAction, setSelectedInvoiceForAction] =
+@@ -85,6 +104,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+     null,
+   );
+   const [actionReason, setActionReason] = useState("");
++  const [actionError, setActionError] = useState("");
+   const [refundMethod, setRefundMethod] = useState<PaymentMethod>("cash");
+   const [refundRef, setRefundRef] = useState("");
+   const isManager = currentStaff.role === "manager"; // quyền invoice:approve
+@@ -92,142 +112,177 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+   // Categories list (mã enum của DB)
+   const categories: string[] = ["all", ...CATEGORY_LIST];
+ 
+-  // Filter products
+-  const filteredProducts = products.filter((p) => {
+-    const matchesCat =
+-      selectedCategory === "all" || p.category === selectedCategory;
+-    const matchesSearch =
+-      p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+-      p.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
+-      p.barcode.includes(searchQuery);
+-    return matchesCat && matchesSearch;
+-  });
++  // ───────────── Tra cứu sản phẩm + tồn kho (lô còn hạn) ─────────────
++  const isSellable = (b: Batch) =>
++    b.quantity > 0 && new Date(b.expiryDate).getTime() > Date.now();
+ 
+-  // Helper to find earliest expiry batch (FIFO)
++  const stockOf = (productId: string) =>
++    batches
++      .filter((b) => b.productId === productId && isSellable(b))
++      .reduce((sum, b) => sum + b.quantity, 0);
++
++  // Lô sẽ được xuất trước (hết hạn sớm nhất, còn hạn dùng) - server phân bổ lô thật khi lập hóa đơn
+   const getFIFOBatch = (productId: string): Batch | undefined => {
+     return batches
+-      .filter((b) => b.productId === productId && b.quantity > 0)
++      .filter((b) => b.productId === productId && isSellable(b))
+       .sort(
+         (a, b) =>
+           new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime(),
+       )[0];
+   };
+ 
+-  // Add to cart
+-  const addToCart = (product: Product) => {
+-    const availableBatch = getFIFOBatch(product.id);
+-    const existingIndex = cart.findIndex(
+-      (item) => item.product.id === product.id,
+-    );
++  // Tìm theo tên / mã, không phân biệt hoa thường và dấu; nhiều từ khóa phải khớp hết
++  const tokens = normalizeText(searchQuery).split(/\s+/).filter(Boolean);
++  const filteredProducts = products.filter((p) => {
++    if (p.status !== "active") return false;
++    const matchesCat =
++      selectedCategory === "all" || p.category === selectedCategory;
++    const haystack = normalizeText(`${p.name} ${p.code}`);
++    return matchesCat && tokens.every((t) => haystack.includes(t));
++  });
+ 
+-    if (existingIndex > 0 || existingIndex === 0) {
+-      const updated = [...cart];
+-      updated[existingIndex].quantity += 1;
+-      const unitPrice = product.sellingPrice;
+-      const discount = product.discountPercent
+-        ? (unitPrice * product.discountPercent) / 100
+-        : 0;
+-      updated[existingIndex].total =
+-        (unitPrice - discount) * updated[existingIndex].quantity;
+-      setCart(updated);
++  // ───────────── Giỏ hàng ─────────────
++  const buildCartItem = (
++    product: Product,
++    quantity: number,
++    selectedBatch?: Batch,
++  ): CartItem => {
++    const unitPrice = product.sellingPrice;
++    const discount = unitDiscountOf(product);
++    return {
++      product,
++      selectedBatch,
++      quantity,
++      unitPrice,
++      discount,
++      total: (unitPrice - discount) * quantity,
++    };
++  };
++
++  const addToCart = (product: Product) => {
++    const stock = stockOf(product.id);
++    const existing = cart.find((item) => item.product.id === product.id);
++    const nextQty = (existing?.quantity ?? 0) + 1;
++    if (stock <= 0) {
++      alert(`"${product.name}" đã hết hàng hoặc các lô còn lại đã hết hạn!`);
++      return;
++    }
++    if (nextQty > stock) {
++      alert(`"${product.name}" chỉ còn ${stock} trong kho!`);
++      return;
++    }
++    if (existing) {
++      setCart(
++        cart.map((item) =>
++          item.product.id === product.id
++            ? buildCartItem(product, nextQty, item.selectedBatch)
++            : item,
++        ),
++      );
+     } else {
+-      const unitPrice = product.sellingPrice;
+-      const discount = product.discountPercent
+-        ? (unitPrice * product.discountPercent) / 100
+-        : 0;
+-      setCart([
+-        ...cart,
+-        {
+-          product,
+-          selectedBatch: availableBatch,
+-          quantity: 1,
+-          unitPrice,
+-          discount,
+-          total: unitPrice - discount,
+-        },
+-      ]);
++      setCart([...cart, buildCartItem(product, 1, getFIFOBatch(product.id))]);
+     }
+   };
+ 
+   // Change quantity
+   const updateQuantity = (index: number, delta: number) => {
+-    const updated = [...cart];
+-    const newQty = updated[index].quantity + delta;
++    const item = cart[index];
++    const newQty = item.quantity + delta;
+     if (newQty <= 0) {
+-      updated.splice(index, 1);
+-    } else {
+-      updated[index].quantity = newQty;
+-      const unitPrice = updated[index].product.sellingPrice;
+-      const discount = updated[index].discount;
+-      updated[index].total = (unitPrice - discount) * newQty;
++      setCart(cart.filter((_, i) => i !== index));
++      return;
+     }
+-    setCart(updated);
++    const stock = stockOf(item.product.id);
++    if (newQty > stock) {
++      alert(`"${item.product.name}" chỉ còn ${stock} trong kho!`);
++      return;
++    }
++    setCart(
++      cart.map((c, i) =>
++        i === index ? buildCartItem(c.product, newQty, c.selectedBatch) : c,
++      ),
++    );
+   };
+ 
+-  // Calculate totals
+-  const subtotal = cart.reduce(
+-    (acc, item) => acc + item.unitPrice * item.quantity,
+-    0,
+-  );
+-  const itemDiscounts = cart.reduce(
+-    (acc, item) => acc + item.discount * item.quantity,
+-    0,
+-  );
+-
+-  // Voucher discount (theo promotions.discountType, có trần maxDiscountAmount khi giảm %)
+-  let voucherDiscount = 0;
+-  if (appliedPromo) {
+-    if (appliedPromo.discountType === "percentage") {
+-      voucherDiscount = (subtotal * appliedPromo.value) / 100;
+-      if (appliedPromo.maxDiscountAmount) {
+-        voucherDiscount = Math.min(
+-          voucherDiscount,
+-          appliedPromo.maxDiscountAmount,
++  // ───────────── Tính tiền + khuyến mãi (server là nguồn tính toán duy nhất) ─────────────
++  const cartKey = cart.map((i) => `${i.product.id}:${i.quantity}`).join("|");
++  useEffect(() => {
++    const seq = ++previewSeq.current;
++    if (cart.length === 0) {
++      setPreview(null);
++      setIsPricing(false);
++      return;
++    }
++    setIsPricing(true);
++    const timer = setTimeout(async () => {
++      try {
++        const result = await invoicesApi.preview(
++          cart.map((i) => ({ productId: i.product.id, quantity: i.quantity })),
++          appliedCode ?? undefined,
+         );
++        if (seq !== previewSeq.current) return;
++        setPreview(result);
++      } catch (e) {
++        if (seq !== previewSeq.current) return;
++        if (appliedCode) {
++          // Giỏ hàng đổi làm mã không còn hợp lệ (VD: dưới giá trị tối thiểu)
++          alert(`${errMsg(e)}\nMã ${appliedCode} đã được gỡ khỏi đơn.`);
++          setAppliedCode(null);
++        } else {
++          setPreview(null);
++          alert(errMsg(e));
++        }
++      } finally {
++        if (seq === previewSeq.current) setIsPricing(false);
+       }
+-    } else {
+-      voucherDiscount = appliedPromo.value;
+-    }
+-  }
++    }, 250);
++    return () => clearTimeout(timer);
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, [cartKey, appliedCode]);
+ 
+-  const totalDiscount = itemDiscounts + voucherDiscount;
+-  const finalTotal = Math.max(0, subtotal - totalDiscount);
++  const subtotal = preview?.subtotal ?? 0;
++  const productDiscount = preview?.productDiscount ?? 0;
++  const promotionDiscount = preview?.promotionDiscount ?? 0;
++  const totalDiscount = preview?.discountAmount ?? 0;
++  const finalTotal = preview?.finalTotal ?? 0;
++  const appliedPromotions = preview?.appliedPromotions ?? [];
+ 
+   // Tổng hợp các khoản thanh toán: chuyển khoản/thẻ không được vượt phần còn lại, tiền mặt được đưa dư để thối
+   const nonCashPaid = transferAmount + cardAmount;
+   const cashDue = Math.max(0, finalTotal - nonCashPaid); // phần phải trả bằng tiền mặt
+   const totalReceived = cashGiven + nonCashPaid;
+   const changeAmount = Math.max(0, totalReceived - finalTotal);
+-  const isPaidEnough = totalReceived >= finalTotal && nonCashPaid <= finalTotal;
+-
+-  // Handle Apply Promo
+-  const handleApplyPromo = () => {
+-    const promo = promotions.find(
+-      (p) =>
+-        p.code.toUpperCase() === promoCode.trim().toUpperCase() &&
+-        p.status === "active",
+-    );
+-    if (!promo) {
+-      alert(
+-        "Mã khuyến mãi không hợp lệ hoặc chương trình không còn hoạt động!",
+-      );
+-      return;
+-    }
+-    if (promo.usageLimit && promo.usedCount >= promo.usageLimit) {
+-      alert("Mã khuyến mãi đã hết lượt sử dụng!");
++  const isPaidEnough =
++    !!preview && totalReceived >= finalTotal && nonCashPaid <= finalTotal;
++
++  // Áp dụng mã khuyến mãi: server kiểm tra hiệu lực, lượt dùng, giá trị tối thiểu
++  const handleApplyPromo = async () => {
++    const code = promoCode.trim().toUpperCase();
++    if (!code) return;
++    if (cart.length === 0) {
++      alert("Vui lòng thêm sản phẩm vào giỏ trước khi áp dụng mã!");
+       return;
+     }
+-    if (subtotal < promo.minOrderValue) {
+-      alert(
+-        `Đơn hàng phải từ ${promo.minOrderValue.toLocaleString("vi-VN")} đ để áp dụng mã này!`,
++    try {
++      const result = await invoicesApi.preview(
++        cart.map((i) => ({ productId: i.product.id, quantity: i.quantity })),
++        code,
+       );
+-      return;
++      if (!result.voucherCode) {
++        alert("Mã khuyến mãi không áp dụng được cho đơn hàng này!");
++        return;
++      }
++      setPreview(result);
++      setAppliedCode(result.voucherCode);
++      setPromoCode("");
++    } catch (e) {
++      alert(errMsg(e));
+     }
+-    setAppliedPromo(promo);
+   };
+ 
+   // Handle Checkout
+-  const handleCheckout = () => {
++  const handleCheckout = async () => {
++    if (isSubmitting) return;
+     if (cart.length === 0) {
+       alert("Giỏ hàng trống! Vui lòng chọn sản phẩm.");
+       return;
+@@ -253,91 +308,91 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+       return;
+     }
+ 
+-    const nowStr = new Date().toLocaleString("vi-VN");
+-    const stamp = Date.now();
+-    const newInvoiceCode = `HD-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(100 + Math.random() * 900)}`;
+-
+-    // Tách từng khoản thanh toán; tiền mặt ghi nhận sau khi trừ tiền thối
+-    const cashApplied = Math.min(cashGiven, cashDue);
+-    const payments: InvoicePayment[] = [];
+-    if (cashApplied > 0) {
+-      payments.push({
+-        id: `pay-${stamp}-c`,
+-        method: "cash",
+-        amount: cashApplied,
+-        status: "confirmed",
+-        confirmedById: currentStaff.id,
+-        confirmedAt: nowStr,
+-      });
+-    }
++    const payments: PaymentPayload[] = [];
++    if (cashGiven > 0) payments.push({ method: "cash", amount: cashGiven });
+     if (transferAmount > 0) {
+       payments.push({
+-        id: `pay-${stamp}-t`,
+         method: "transfer",
+         amount: transferAmount,
+-        status: "confirmed",
+         reference: transferRef.trim(),
+-        confirmedById: currentStaff.id,
+-        confirmedAt: nowStr,
+       });
+     }
+     if (cardAmount > 0) {
+       payments.push({
+-        id: `pay-${stamp}-k`,
+         method: "card",
+         amount: cardAmount,
+-        status: "confirmed",
+         reference: cardRef.trim(),
+-        confirmedById: currentStaff.id,
+-        confirmedAt: nowStr,
+       });
+     }
+-    const paymentMethod: PaymentMethod =
+-      payments.length > 1 ? "mixed" : (payments[0]?.method ?? "cash");
+-
+-    const newInvoice: Invoice = {
+-      id: `inv-${stamp}`,
+-      code: newInvoiceCode,
+-      createdAt: nowStr,
+-      cashierId: currentStaff.id,
+-      cashierName: currentStaff.name,
+-      items: cart.map((item) => ({
+-        productId: item.product.id,
+-        productCode: item.product.code,
+-        productName: item.product.name,
+-        batchId: item.selectedBatch?.id,
+-        batchCode: item.selectedBatch?.batchCode || "LOTH-DEFAULT",
+-        unit: item.product.unit,
+-        quantity: item.quantity,
+-        unitPrice: item.unitPrice,
+-        discount: item.discount,
+-        subtotal: item.total,
+-      })),
+-      subtotal,
+-      discountAmount: totalDiscount,
+-      voucherCode: appliedPromo?.code,
+-      finalTotal,
+-      paymentMethod,
+-      payments,
+-      receivedAmount: totalReceived,
+-      changeAmount,
+-      paidAt: nowStr,
+-      status: "completed",
+-      notes,
+-    };
++    if (payments.length === 0) payments.push({ method: "cash", amount: 0 });
+ 
+-    onCompleteSale(newInvoice);
+-
+-    // Reset cart
+-    setCart([]);
+-    setAppliedPromo(null);
+-    setPromoCode("");
+-    setCashGiven(0);
+-    setTransferAmount(0);
+-    setTransferRef("");
+-    setCardAmount(0);
+-    setCardRef("");
+-    setNotes("");
++    setIsSubmitting(true);
++    try {
++      const invoice = await onCompleteSale({
++        items: cart.map((i) => ({
++          productId: i.product.id,
++          quantity: i.quantity,
++        })),
++        voucherCode: appliedCode ?? undefined,
++        payments,
++        notes: notes.trim() || undefined,
++      });
++
++      // Thành công: hiện hóa đơn để in, làm mới giỏ hàng
++      setViewInvoice(invoice);
++      setCart([]);
++      setPreview(null);
++      setAppliedCode(null);
++      setPromoCode("");
++      setCashGiven(0);
++      setTransferAmount(0);
++      setTransferRef("");
++      setCardAmount(0);
++      setCardRef("");
++      setNotes("");
++    } catch (e) {
++      alert(`Không thể lập hóa đơn: ${errMsg(e)}`);
++    } finally {
++      setIsSubmitting(false);
++    }
++  };
++
++  const closeActionDialog = () => {
++    setSelectedInvoiceForAction(null);
++    setActionType(null);
++    setActionError("");
++    setRefundMethod("cash");
++    setRefundRef("");
++  };
++
++  // Xác nhận đổi trả / hủy hóa đơn
++  const handleConfirmAction = async () => {
++    if (!selectedInvoiceForAction || !actionType || isSubmitting) return;
++    if (refundMethod === "transfer" && !refundRef.trim()) {
++      setActionError("Vui lòng nhập mã giao dịch hoàn tiền chuyển khoản.");
++      return;
++    }
++    const approval: ApprovalPayload = {
++      reason:
++        actionReason.trim() ||
++        (actionType === "return" ? "Khách đổi trả" : "Hủy hóa đơn sai sót"),
++      refundMethod: refundMethod as ApprovalPayload["refundMethod"],
++      refundRef: refundMethod === "transfer" ? refundRef.trim() : undefined,
++    };
++    setIsSubmitting(true);
++    setActionError("");
++    try {
++      if (actionType === "return") {
++        await onReturnInvoice(selectedInvoiceForAction.id, approval);
++      } else {
++        await onCancelInvoice(selectedInvoiceForAction.id, approval);
++      }
++      closeActionDialog();
++    } catch (e) {
++      setActionError(errMsg(e));
++    } finally {
++      setIsSubmitting(false);
++    }
+   };
+ 
+   return (
+@@ -374,7 +429,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+           {/* LEFT 7 COLS: Product Catalog & Search (1.1) */}
+           <div className="lg:col-span-7 space-y-4">
+-            {/* Search & Barcode Quick Input */}
++            {/* Tra cứu sản phẩm (tên / mã) */}
+             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
+               <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                 {/* Search Text */}
+@@ -385,7 +440,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+                     type="text"
+                     value={searchQuery}
+                     onChange={(e) => setSearchQuery(e.target.value)}
+-                    placeholder="Tìm theo tên sữa, mã TH-MILK..."
++                    placeholder="Tìm theo tên sản phẩm hoặc mã (VD: sữa chua, TH-MILK)..."
+                     className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-sky-500 focus:bg-white transition-all outline-hidden"
+                   />
+                 </div>
+@@ -415,17 +470,25 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[540px] overflow-y-auto pr-1">
+               {filteredProducts.map((product) => {
+                 const availableBatch = getFIFOBatch(product.id);
++                const stock = stockOf(product.id);
+                 const isExpiringSoon =
+-                  availableBatch?.status === "expiring_soon";
++                  !!availableBatch &&
++                  (new Date(availableBatch.expiryDate).getTime() - Date.now()) /
++                    86400000 <=
++                    30;
+ 
+                 return (
+                   <div
+                     key={product.id}
+                     id={`product-card-${product.id}`}
+                     onClick={() => addToCart(product)}
+-                    className="bg-white border border-slate-200 hover:border-sky-500 hover:shadow-md rounded-xl p-3.5 flex flex-col justify-between cursor-pointer transition-all group relative overflow-hidden"
++                    className={`bg-white border border-slate-200 rounded-xl p-3.5 flex flex-col justify-between transition-all group relative overflow-hidden ${
++                      stock > 0
++                        ? "hover:border-sky-500 hover:shadow-md cursor-pointer"
++                        : "opacity-60 cursor-not-allowed"
++                    }`}
+                   >
+-                    {product.discountPercent && (
++                    {!!product.discountPercent && product.discountPercent > 0 && (
+                       <span className="absolute top-2 right-2 bg-rose-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
+                         -{product.discountPercent}%
+                       </span>
+@@ -455,7 +518,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+                             Lô: {availableBatch.batchCode}
+                           </span>
+                           <span className="font-semibold">
+-                            {availableBatch.expiryDate.slice(5)}
++                            HSD {availableBatch.expiryDate.slice(0, 10)}
+                           </span>
+                         </div>
+                       ) : (
+@@ -463,6 +526,11 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+                           Hết hàng trong kho
+                         </div>
+                       )}
++                      {stock > 0 && (
++                        <p className="text-[10px] text-slate-500">
++                          Tồn kho (còn hạn): {stock}
++                        </p>
++                      )}
+                     </div>
+ 
+                     <div className="pt-3 mt-2 border-t border-slate-100 flex items-center justify-between">
+@@ -571,13 +639,16 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+                   <Tag className="w-3.5 h-3.5 text-rose-500" />
+                   <span>Mã khuyến mãi / Voucher</span>
+                 </label>
+-                {appliedPromo ? (
++                {appliedCode ? (
+                   <div className="bg-emerald-50 p-2 rounded-lg border border-emerald-200 flex items-center justify-between text-xs text-emerald-800">
+                     <span className="font-bold">
+-                      ✓ {appliedPromo.code}: {appliedPromo.name}
++                      ✓ {appliedCode}
++                      {appliedPromotions.find((a) => a.code === appliedCode)
++                        ? `: ${appliedPromotions.find((a) => a.code === appliedCode)!.name}`
++                        : ""}
+                     </span>
+                     <button
+-                      onClick={() => setAppliedPromo(null)}
++                      onClick={() => setAppliedCode(null)}
+                       className="text-rose-600 font-bold hover:underline"
+                     >
+                       Hủy mã
+@@ -592,6 +663,9 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+                       onChange={(e) =>
+                         setPromoCode(e.target.value.toUpperCase())
+                       }
++                      onKeyDown={(e) => {
++                        if (e.key === "Enter") handleApplyPromo();
++                      }}
+                       className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-hidden focus:bg-white font-mono uppercase"
+                     />
+                     <button
+@@ -696,8 +770,25 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+                   <span>Tổng tiền hàng:</span>
+                   <span>{subtotal.toLocaleString("vi-VN")} đ</span>
+                 </div>
+-                {totalDiscount > 0 && (
++                {productDiscount > 0 && (
+                   <div className="flex justify-between text-rose-600 font-medium">
++                    <span>Giảm giá sản phẩm:</span>
++                    <span>-{productDiscount.toLocaleString("vi-VN")} đ</span>
++                  </div>
++                )}
++                {appliedPromotions.map((a) => (
++                  <div
++                    key={a.promotionId}
++                    className="flex justify-between text-rose-600 font-medium"
++                  >
++                    <span className="truncate pr-2">
++                      Khuyến mãi {a.code}:
++                    </span>
++                    <span>-{a.discountAmount.toLocaleString("vi-VN")} đ</span>
++                  </div>
++                ))}
++                {promotionDiscount > 0 && appliedPromotions.length > 1 && (
++                  <div className="flex justify-between text-slate-600 font-medium border-t border-slate-200 pt-1">
+                     <span>Tổng giảm giá:</span>
+                     <span>-{totalDiscount.toLocaleString("vi-VN")} đ</span>
+                   </div>
+@@ -712,10 +803,14 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+               <button
+                 id="btn-checkout-sale"
+                 onClick={handleCheckout}
+-                disabled={cart.length === 0 || !isPaidEnough}
++                disabled={
++                  cart.length === 0 || !isPaidEnough || isPricing || isSubmitting
++                }
+                 className="w-full py-3 rounded-xl bg-[#004885] hover:bg-[#00386b] disabled:bg-slate-300 text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed"
+               >
+-                <span>Hoàn tất & In hóa đơn</span>
++                <span>
++                  {isSubmitting ? "Đang lập hóa đơn..." : "Hoàn tất & In hóa đơn"}
++                </span>
+                 <span className="text-xs bg-white/20 px-2 py-0.5 rounded font-mono">
+                   F9
+                 </span>
+@@ -793,6 +888,13 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+                       </span>
+                     </td>
+                     <td className="py-2.5 px-3 text-right space-x-1.5 whitespace-nowrap">
++                      <button
++                        onClick={() => setViewInvoice(inv)}
++                        className="px-2 py-1 rounded bg-slate-100 text-slate-700 hover:bg-slate-200 font-semibold text-[11px] inline-flex items-center gap-1"
++                      >
++                        <Eye className="w-3 h-3" />
++                        <span>Xem</span>
++                      </button>
+                       {inv.status === "completed" && (
+                         <>
+                           <button
+@@ -800,6 +902,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+                               setSelectedInvoiceForAction(inv);
+                               setActionType("return");
+                               setActionReason("");
++                              setActionError("");
+                             }}
+                             className="px-2 py-1 rounded bg-amber-50 text-amber-800 hover:bg-amber-100 font-semibold text-[11px] inline-flex items-center gap-1"
+                           >
+@@ -811,6 +914,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+                               setSelectedInvoiceForAction(inv);
+                               setActionType("cancel");
+                               setActionReason("");
++                              setActionError("");
+                             }}
+                             className="px-2 py-1 rounded bg-rose-50 text-rose-700 hover:bg-rose-100 font-semibold text-[11px] inline-flex items-center gap-1"
+                           >
+@@ -898,55 +1002,41 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
+               )}
+             </div>
+ 
++            {actionError && (
++              <p className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-2">
++                {actionError}
++              </p>
++            )}
++
+             <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+               <button
+-                onClick={() => {
+-                  setSelectedInvoiceForAction(null);
+-                  setActionType(null);
+-                }}
++                onClick={closeActionDialog}
+                 className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg font-medium"
+               >
+                 Hủy bỏ
+               </button>
+               <button
+-                disabled={!isManager}
+-                onClick={() => {
+-                  const approval = {
+-                    reason:
+-                      actionReason ||
+-                      (actionType === "return"
+-                        ? "Khách đổi trả"
+-                        : "Hủy hóa đơn sai sót"),
+-                    refundAmount: selectedInvoiceForAction.finalTotal,
+-                    refundMethod,
+-                    refundRef:
+-                      refundMethod === "transfer"
+-                        ? refundRef.trim() || undefined
+-                        : undefined,
+-                    approvedById: currentStaff.id,
+-                  };
+-                  if (actionType === "return") {
+-                    onReturnInvoice(selectedInvoiceForAction.id, approval);
+-                  } else {
+-                    onCancelInvoice(selectedInvoiceForAction.id, approval);
+-                  }
+-                  setSelectedInvoiceForAction(null);
+-                  setActionType(null);
+-                  setRefundMethod("cash");
+-                  setRefundRef("");
+-                }}
++                disabled={!isManager || isSubmitting}
++                onClick={handleConfirmAction}
+                 className={`px-4 py-1.5 text-xs font-bold text-white rounded-lg disabled:opacity-40 disabled:cursor-not-allowed ${
+                   actionType === "return"
+                     ? "bg-amber-600 hover:bg-amber-700"
+                     : "bg-rose-600 hover:bg-rose-700"
+                 }`}
+               >
+-                {actionType === "return" ? "Xác nhận đổi trả" : "Xác nhận hủy"}
++                {isSubmitting
++                  ? "Đang xử lý..."
++                  : actionType === "return"
++                    ? "Xác nhận đổi trả"
++                    : "Xác nhận hủy"}
+               </button>
+             </div>
+           </div>
+         </div>
+       )}
++
++      {/* Hóa đơn vừa lập / đang xem (in được) */}
++      <InvoiceModal invoice={viewInvoice} onClose={() => setViewInvoice(null)} />
+     </div>
+   );
+ };
+diff --git a/frontend/src/hooks/useBatches.ts b/frontend/src/hooks/useBatches.ts
+index 3a9d360..5581421 100644
+--- a/frontend/src/hooks/useBatches.ts
++++ b/frontend/src/hooks/useBatches.ts
+@@ -15,6 +15,11 @@ export function useBatches() {
+       .finally(() => setLoading(false));
+   }, []);
+ 
++  // Tải lại tồn kho từ server (sau khi bán hàng / đổi trả làm thay đổi số lượng lô)
++  const refresh = async () => {
++    setBatches(await batchesApi.getAll());
++  };
++
+   const addBatch = async (data: Omit<Batch, "id">) => {
+     const created = await batchesApi.create(data);
+     setBatches((prev) => [created, ...prev]); 
+@@ -31,6 +36,7 @@ export function useBatches() {
+     loading, 
+     error, 
+     addBatch, 
+-    adjustStock 
++    adjustStock,
++    refresh,
+   };
+ }
+\ No newline at end of file
+diff --git a/frontend/src/hooks/useInvoices.ts b/frontend/src/hooks/useInvoices.ts
+new file mode 100644
+index 0000000..369804d
+--- /dev/null
++++ b/frontend/src/hooks/useInvoices.ts
+@@ -0,0 +1,41 @@
++import { useState, useEffect } from "react";
++import { Invoice } from "../types";
++import {
++  invoicesApi,
++  CreateInvoicePayload,
++  ApprovalPayload,
++} from "../services/invoices";
++
++export function useInvoices() {
++  const [invoices, setInvoices] = useState<Invoice[]>([]);
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState<string | null>(null);
++
++  useEffect(() => {
++    invoicesApi
++      .list()
++      .then(setInvoices)
++      .catch((e) => setError(e.message))
++      .finally(() => setLoading(false));
++  }, []);
++
++  // Lập hóa đơn: server tính tiền, trừ kho, ghi thanh toán rồi trả hóa đơn hoàn chỉnh
++  const createInvoice = async (data: CreateInvoicePayload) => {
++    const created = await invoicesApi.create(data);
++    setInvoices((prev) => [created, ...prev]);
++    return created;
++  };
++
++  const replaceInvoice = (updated: Invoice) =>
++    setInvoices((prev) => prev.map((i) => (i.id === updated.id ? updated : i)));
++
++  const returnInvoice = async (id: string, data: ApprovalPayload) => {
++    replaceInvoice(await invoicesApi.returnInvoice(id, data));
++  };
++
++  const cancelInvoice = async (id: string, data: ApprovalPayload) => {
++    replaceInvoice(await invoicesApi.cancelInvoice(id, data));
++  };
++
++  return { invoices, loading, error, createInvoice, returnInvoice, cancelInvoice };
++}
+diff --git a/frontend/src/lib/api.ts b/frontend/src/lib/api.ts
+index 51e96f4..201d0b3 100644
+--- a/frontend/src/lib/api.ts
++++ b/frontend/src/lib/api.ts
+@@ -10,8 +10,11 @@ export async function fetchApi<T>(
+   options: RequestInit = {}
+ ): Promise<T> {
+   // Tự động thiết lập Content-Type là JSON
++  // Gắn token đăng nhập (nếu có) để gọi các API cần xác thực như /api/invoices
++  const token = localStorage.getItem('access_token');
+   const headers = {
+     'Content-Type': 'application/json',
++    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+     ...options.headers,
+   };
+ 
+diff --git a/frontend/src/services/invoices.ts b/frontend/src/services/invoices.ts
+new file mode 100644
+index 0000000..db52d7b
+--- /dev/null
++++ b/frontend/src/services/invoices.ts
+@@ -0,0 +1,142 @@
++import { fetchApi } from "../lib/api";
++import { toNum } from "../lib/labels";
++import { Invoice, InvoiceApproval, InvoiceItem, InvoicePayment, PaymentMethod } from "../types";
++
++// ===== Dữ liệu gửi lên server =====
++export interface CartLinePayload {
++  productId: string;
++  quantity: number;
++}
++
++export interface PaymentPayload {
++  method: Exclude<PaymentMethod, "mixed">;
++  amount: number;
++  reference?: string;
++}
++
++export interface CreateInvoicePayload {
++  items: CartLinePayload[];
++  voucherCode?: string;
++  payments: PaymentPayload[];
++  notes?: string;
++}
++
++export interface ApprovalPayload {
++  reason: string;
++  refundMethod: Exclude<PaymentMethod, "mixed">;
++  refundRef?: string;
++}
++
++// ===== Kết quả tính thử (POST /invoices/preview) =====
++export interface AppliedPromotion {
++  promotionId: string;
++  code: string;
++  name: string;
++  discountAmount: number;
++}
++
++export interface InvoicePreview {
++  subtotal: number;
++  productDiscount: number;
++  promotionDiscount: number;
++  discountAmount: number;
++  finalTotal: number;
++  appliedPromotions: AppliedPromotion[];
++  voucherCode?: string;
++}
++
++// Prisma trả DECIMAL dạng chuỗi và ngày dạng ISO -> chuẩn hóa về kiểu Invoice của frontend
++const fmtDate = (v?: string | null) => (v ? new Date(v).toLocaleString("vi-VN") : undefined);
++
++const normalizeInvoice = (r: any): Invoice => ({
++  id: r.id,
++  code: r.code,
++  createdAt: fmtDate(r.createdAt)!,
++  cashierId: r.cashierId,
++  cashierName: r.staff?.name ?? "",
++  cashSessionId: r.cashSessionId ?? undefined,
++  items: (r.invoice_items ?? []).map(
++    (i: any): InvoiceItem => ({
++      productId: i.productId,
++      productCode: i.products?.code ?? "",
++      productName: i.products?.name ?? "",
++      batchId: i.batchId ?? undefined,
++      batchCode: i.batches?.batchCode ?? "",
++      unit: i.products?.unit ?? "",
++      quantity: i.quantity,
++      unitPrice: toNum(i.unitPrice),
++      discount: toNum(i.discount), // tổng giảm của dòng (gồm giảm riêng + khuyến mãi)
++      subtotal: toNum(i.subtotal),
++    }),
++  ),
++  subtotal: toNum(r.subtotal),
++  discountAmount: toNum(r.discountAmount),
++  voucherCode: r.voucherCode ?? undefined,
++  finalTotal: toNum(r.finalTotal),
++  paymentMethod: r.paymentMethod,
++  payments: (r.invoice_payments ?? []).map(
++    (p: any): InvoicePayment => ({
++      id: p.id,
++      method: p.method,
++      amount: toNum(p.amount),
++      status: p.status,
++      reference: p.reference ?? undefined,
++      confirmedById: p.confirmedById ?? undefined,
++      confirmedAt: fmtDate(p.confirmedAt),
++    }),
++  ),
++  receivedAmount: toNum(r.receivedAmount),
++  changeAmount: toNum(r.changeAmount),
++  paidAt: fmtDate(r.paidAt),
++  status: r.status,
++  notes: r.notes ?? undefined,
++  approvals: (r.invoice_approvals ?? []).map(
++    (a: any): InvoiceApproval => ({
++      id: a.id,
++      action: a.action,
++      reason: a.reason,
++      refundAmount: toNum(a.refundAmount),
++      refundMethod: a.refundMethod ?? undefined,
++      refundRef: a.refundRef ?? undefined,
++      approvedById: a.approvedById,
++      createdAt: fmtDate(a.createdAt)!,
++    }),
++  ),
++});
++
++export const invoicesApi = {
++  list: async () =>
++    (await fetchApi<any[]>("/api/invoices")).map(normalizeInvoice),
++
++  // Tính thử giỏ hàng + khuyến mãi (không ghi DB)
++  preview: (items: CartLinePayload[], voucherCode?: string) =>
++    fetchApi<InvoicePreview>("/api/invoices/preview", {
++      method: "POST",
++      body: JSON.stringify({ items, voucherCode: voucherCode || undefined }),
++    }),
++
++  // Lập hóa đơn + thanh toán + trừ kho
++  create: async (data: CreateInvoicePayload) =>
++    normalizeInvoice(
++      await fetchApi<any>("/api/invoices", {
++        method: "POST",
++        body: JSON.stringify(data),
++      }),
++    ),
++
++  returnInvoice: async (id: string, data: ApprovalPayload) =>
++    normalizeInvoice(
++      await fetchApi<any>(`/api/invoices/${id}/return`, {
++        method: "POST",
++        body: JSON.stringify(data),
++      }),
++    ),
++
++  cancelInvoice: async (id: string, data: ApprovalPayload) =>
++    normalizeInvoice(
++      await fetchApi<any>(`/api/invoices/${id}/cancel`, {
++        method: "POST",
++        body: JSON.stringify(data),
++      }),
++    ),
++};
+diff --git a/server/prisma/seed-sales-test.sql b/server/prisma/seed-sales-test.sql
+new file mode 100644
+index 0000000..21a1f34
+--- /dev/null
++++ b/server/prisma/seed-sales-test.sql
+@@ -0,0 +1,37 @@
++-- =============================================================================
++-- DỮ LIỆU THỬ cho chức năng bán hàng (TÙY CHỌN - chỉ dùng để test, KHÔNG phải data chính thức)
++-- Chạy sau init.sql + data.sql:
++--   npx prisma db execute --file prisma/seed-sales-test.sql --schema prisma/schema.prisma
++-- Có thể chạy lại nhiều lần (ON CONFLICT DO NOTHING).
++-- Ngày tính theo thời điểm chạy để lô/khuyến mãi luôn còn hiệu lực khi test.
++-- =============================================================================
++
++-- Lô hàng: mỗi sản phẩm 2 lô (1 lô sắp hết hạn để test FEFO / near_expiry), riêng nước cam có thêm 1 lô ĐÃ HẾT HẠN
++INSERT INTO "batches" ("batchCode", "productId", "manufacturingDate", "expiryDate", "quantity", "importPrice", "status")
++SELECT v.code, p.id, now() - v.mfg::interval, now() + v.exp::interval, v.qty, p."costPrice", v.st::"BatchStatus"
++FROM (VALUES
++  ('TEST-DAU-A',   'TH-MILK-DAU-180ML',  '60 days', '20 days',  5, 'expiring_soon'),
++  ('TEST-DAU-B',   'TH-MILK-DAU-180ML',  '10 days', '150 days', 30, 'good'),
++  ('TEST-FRESH-A', 'TH-FRESH-1L',        '3 days',  '5 days',   4, 'expiring_soon'),
++  ('TEST-FRESH-B', 'TH-FRESH-1L',        '1 days',  '9 days',   20, 'expiring_soon'),
++  ('TEST-YOG-A',   'TH-YOGURT-ALOE',     '5 days',  '40 days',  25, 'good'),
++  ('TEST-YOG-B',   'TH-YOGURT-ALOE',     '2 days',  '60 days',  25, 'good'),
++  ('TEST-ICE-A',   'TH-ICECREAM-SOCOLA', '30 days', '300 days', 40, 'good'),
++  ('TEST-JUICE-A', 'TH-JUICE-ORANGE',    '10 days', '90 days',  15, 'good'),
++  ('TEST-JUICE-X', 'TH-JUICE-ORANGE',    '200 days','-2 days',  50, 'expired')
++) AS v(code, pcode, mfg, exp, qty, st)
++JOIN "products" p ON p."code" = v.pcode
++ON CONFLICT ("batchCode") DO NOTHING;
++
++-- Khuyến mãi mẫu
++--   THSUMMER10 : tự động, giảm 10% nhóm sữa chua, đơn từ 100.000đ
++--   THVIP20K   : cần nhập mã, giảm 20.000đ cho đơn từ 200.000đ
++--   THFRESH15  : cần nhập mã, giảm 15% tối đa 30.000đ, giới hạn 3 lượt (test hết lượt dùng)
++--   THOLD      : đã tạm dừng (test mã không còn hoạt động)
++INSERT INTO "promotions" ("code","name","scope","discountType","value","maxDiscountAmount","startDate","endDate","minOrderValue","applicableCategory","requiresCode","usageLimit","status")
++VALUES
++  ('THSUMMER10','Giảm 10% sữa chua','category','percentage',10,NULL, now() - interval '1 day', now() + interval '30 days', 100000,'SUA_CHUA',false,NULL,'active'),
++  ('THVIP20K','Đơn từ 200k giảm 20.000đ','order','fixed_amount',20000,NULL, now() - interval '1 day', now() + interval '30 days', 200000,NULL,true,NULL,'active'),
++  ('THFRESH15','Giảm 15% tối đa 30k','order','percentage',15,30000, now() - interval '1 day', now() + interval '30 days', 0,NULL,true,3,'active'),
++  ('THOLD','Chương trình đã tạm dừng','order','fixed_amount',10000,NULL, now() - interval '10 days', now() + interval '30 days', 0,NULL,true,NULL,'paused')
++ON CONFLICT ("code") DO NOTHING;
+diff --git a/server/src/app.module.ts b/server/src/app.module.ts
+index 2a75917..ff06814 100644
+--- a/server/src/app.module.ts
++++ b/server/src/app.module.ts
+@@ -9,9 +9,11 @@ import { StaffModule } from './staff/staff.module';
+ import { PurchaseOrdersModule } from './purchase_orders/purchase_orders.module';
+ import { PurchaseOrderItemsModule } from './purchase_order_items/purchase_order_items.module';
+ import { BatchesModule } from './batches/batches.module';
++import { PromotionsModule } from './promotions/promotions.module';
++import { InvoicesModule } from './invoices/invoices.module';
+ 
+ @Module({
+-  imports: [PrismaModule, ProductsModule, SuppliersModule, AuthModule, StaffModule, PurchaseOrdersModule, PurchaseOrderItemsModule, BatchesModule],
++  imports: [PrismaModule, ProductsModule, SuppliersModule, AuthModule, StaffModule, PurchaseOrdersModule, PurchaseOrderItemsModule, BatchesModule, PromotionsModule, InvoicesModule],
+   controllers: [AppController],
+   providers: [AppService],
+ })
+diff --git a/server/src/invoices/dto/invoice.dto.ts b/server/src/invoices/dto/invoice.dto.ts
+new file mode 100644
+index 0000000..c2b06e0
+--- /dev/null
++++ b/server/src/invoices/dto/invoice.dto.ts
+@@ -0,0 +1,105 @@
++import { Type } from 'class-transformer';
++import {
++  ArrayMaxSize,
++  ArrayMinSize,
++  IsArray,
++  IsIn,
++  IsInt,
++  IsNotEmpty,
++  IsNumber,
++  IsOptional,
++  IsString,
++  Max,
++  MaxLength,
++  Min,
++  ValidateNested,
++} from 'class-validator';
++
++export class CartLineDto {
++  @IsString()
++  @IsNotEmpty()
++  productId: string;
++
++  @IsInt()
++  @Min(1)
++  @Max(9999)
++  quantity: number;
++}
++
++/** Dùng cho POST /invoices/preview: tính thử tiền + khuyến mãi, không ghi DB */
++export class PreviewInvoiceDto {
++  @IsArray()
++  @ArrayMinSize(1, { message: 'Giỏ hàng trống' })
++  @ArrayMaxSize(100)
++  @ValidateNested({ each: true })
++  @Type(() => CartLineDto)
++  items: CartLineDto[];
++
++  @IsOptional()
++  @IsString()
++  @MaxLength(50)
++  voucherCode?: string;
++}
++
++export class PaymentInputDto {
++  @IsIn(['cash', 'transfer', 'card'])
++  method: 'cash' | 'transfer' | 'card';
++
++  @IsNumber()
++  @Min(0)
++  amount: number;
++
++  @IsOptional()
++  @IsString()
++  @MaxLength(100)
++  reference?: string;
++}
++
++export class CreateInvoiceDto extends PreviewInvoiceDto {
++  @IsArray()
++  @ArrayMinSize(1)
++  @ArrayMaxSize(10)
++  @ValidateNested({ each: true })
++  @Type(() => PaymentInputDto)
++  payments: PaymentInputDto[];
++
++  @IsOptional()
++  @IsString()
++  @MaxLength(500)
++  notes?: string;
++}
++
++/** Duyệt đổi trả / hủy hóa đơn (chỉ quản lý) */
++export class ApproveInvoiceDto {
++  @IsString()
++  @IsNotEmpty()
++  @MaxLength(500)
++  reason: string;
++
++  @IsIn(['cash', 'transfer', 'card'])
++  refundMethod: 'cash' | 'transfer' | 'card';
++
++  @IsOptional()
++  @IsString()
++  @MaxLength(100)
++  refundRef?: string;
++}
++
++export class QueryInvoiceDto {
++  @IsOptional()
++  @IsIn(['completed', 'pending_payment', 'returned', 'cancelled', 'pending_approval'])
++  status?: 'completed' | 'pending_payment' | 'returned' | 'cancelled' | 'pending_approval';
++
++  /** Tìm theo mã hóa đơn */
++  @IsOptional()
++  @IsString()
++  @MaxLength(50)
++  search?: string;
++
++  @IsOptional()
++  @Type(() => Number)
++  @IsInt()
++  @Min(1)
++  @Max(500)
++  limit: number = 200;
++}
+diff --git a/server/src/invoices/invoice-pricing.ts b/server/src/invoices/invoice-pricing.ts
+new file mode 100644
+index 0000000..714502e
+--- /dev/null
++++ b/server/src/invoices/invoice-pricing.ts
+@@ -0,0 +1,306 @@
++import { BadRequestException } from '@nestjs/common';
++
++/**
++ * Bộ tính giá bán hàng - thuần logic, KHÔNG đụng DB để test độc lập.
++ *   1. allocateFefo : chia số lượng khách mua vào các lô (hết hạn trước, xuất trước)
++ *   2. priceRows    : tính giảm giá riêng của sản phẩm + khuyến mãi (tự động + mã voucher)
++ *   3. settlePayments : chốt các khoản thanh toán, tiền thừa, phương thức
++ * Tiền là VND nên mọi khoản giảm giá được làm tròn về số nguyên.
++ */
++
++export type PayMethod = 'cash' | 'transfer' | 'card';
++
++export interface ProductInfo {
++  id: string;
++  code: string;
++  name: string;
++  unit: string;
++  category: string;
++  sellingPrice: number;
++  discountPercent: number; // 0 nếu không giảm riêng
++}
++
++export interface BatchInfo {
++  id: string;
++  batchCode: string;
++  productId: string;
++  expiryDate: Date;
++  quantity: number;
++}
++
++export interface PromoInfo {
++  id: string;
++  code: string;
++  name: string;
++  scope: 'order' | 'category' | 'product' | 'near_expiry';
++  discountType: 'percentage' | 'fixed_amount';
++  value: number;
++  maxDiscountAmount: number | null;
++  startDate: Date;
++  endDate: Date;
++  minOrderValue: number;
++  applicableCategory: string | null;
++  nearExpiryDays: number | null;
++  requiresCode: boolean;
++  usageLimit: number | null;
++  usedCount: number;
++  status: string;
++  productIds: string[];
++}
++
++/** 1 dòng hóa đơn = 1 sản phẩm lấy từ 1 lô */
++export interface PricedRow {
++  productId: string;
++  category: string;
++  batchId: string;
++  batchCode: string;
++  expiryDate: Date;
++  quantity: number;
++  unitPrice: number;
++  /** giảm giá riêng của sản phẩm (tổng của dòng) */
++  productDiscount: number;
++  /** giảm giá từ khuyến mãi được phân bổ vào dòng */
++  promoDiscount: number;
++}
++
++export interface AppliedPromo {
++  promotionId: string;
++  code: string;
++  name: string;
++  discountAmount: number;
++}
++
++export interface PricingResult {
++  rows: PricedRow[];
++  subtotal: number; // tổng tiền hàng theo giá niêm yết
++  productDiscount: number;
++  promoDiscount: number;
++  discountAmount: number; // productDiscount + promoDiscount
++  finalTotal: number;
++  applied: AppliedPromo[];
++}
++
++const DAY_MS = 24 * 60 * 60 * 1000;
++
++/** Giá giảm riêng trên 1 đơn vị (làm tròn VND) */
++export const unitProductDiscount = (unitPrice: number, discountPercent: number) =>
++  discountPercent > 0 ? Math.round((unitPrice * discountPercent) / 100) : 0;
++
++// ───────────────────────── 1. Phân bổ lô (FEFO) ─────────────────────────
++
++export function allocateFefo(
++  lines: { productId: string; quantity: number }[],
++  products: Map<string, ProductInfo>,
++  batches: BatchInfo[],
++  now: Date,
++): PricedRow[] {
++  // Gộp các dòng trùng sản phẩm
++  const wanted = new Map<string, number>();
++  for (const l of lines) wanted.set(l.productId, (wanted.get(l.productId) ?? 0) + l.quantity);
++
++  const rows: PricedRow[] = [];
++  for (const [productId, qty] of wanted) {
++    const product = products.get(productId);
++    if (!product) throw new BadRequestException('Sản phẩm không tồn tại');
++
++    const usable = batches
++      .filter((b) => b.productId === productId && b.quantity > 0 && b.expiryDate.getTime() > now.getTime())
++      .sort((a, b) => a.expiryDate.getTime() - b.expiryDate.getTime() || a.batchCode.localeCompare(b.batchCode));
++
++    const available = usable.reduce((s, b) => s + b.quantity, 0);
++    if (available < qty) {
++      throw new BadRequestException(
++        `Sản phẩm "${product.name}" không đủ tồn kho (cần ${qty}, còn bán được ${available})`,
++      );
++    }
++
++    const perUnitDiscount = unitProductDiscount(product.sellingPrice, product.discountPercent);
++    let remaining = qty;
++    for (const b of usable) {
++      if (remaining <= 0) break;
++      const take = Math.min(b.quantity, remaining);
++      rows.push({
++        productId,
++        category: product.category,
++        batchId: b.id,
++        batchCode: b.batchCode,
++        expiryDate: b.expiryDate,
++        quantity: take,
++        unitPrice: product.sellingPrice,
++        productDiscount: perUnitDiscount * take,
++        promoDiscount: 0,
++      });
++      remaining -= take;
++    }
++  }
++  return rows;
++}
++
++// ───────────────────────── 2. Khuyến mãi ─────────────────────────
++
++const rowGross = (r: PricedRow) => r.unitPrice * r.quantity;
++const rowNet = (r: PricedRow) => rowGross(r) - r.productDiscount - r.promoDiscount;
++
++/** Lý do không áp dụng được, null = áp dụng được */
++function promoRejectReason(p: PromoInfo, now: Date, subtotal: number): string | null {
++  if (p.status !== 'active') return 'Chương trình khuyến mãi không còn hoạt động';
++  if (now.getTime() < p.startDate.getTime()) return 'Chương trình khuyến mãi chưa bắt đầu';
++  if (now.getTime() > p.endDate.getTime()) return 'Chương trình khuyến mãi đã kết thúc';
++  if (p.usageLimit != null && p.usedCount >= p.usageLimit) return 'Mã khuyến mãi đã hết lượt sử dụng';
++  if (subtotal < p.minOrderValue) {
++    return `Đơn hàng phải từ ${p.minOrderValue.toLocaleString('vi-VN')} đ để áp dụng khuyến mãi này`;
++  }
++  return null;
++}
++
++function eligibleRows(p: PromoInfo, rows: PricedRow[], now: Date): PricedRow[] {
++  switch (p.scope) {
++    case 'order':
++      return rows;
++    case 'category':
++      return rows.filter((r) => r.category === p.applicableCategory);
++    case 'product':
++      return rows.filter((r) => p.productIds.includes(r.productId));
++    case 'near_expiry': {
++      const days = p.nearExpiryDays ?? 0;
++      return rows.filter(
++        (r) =>
++          (r.expiryDate.getTime() - now.getTime()) / DAY_MS <= days &&
++          (p.productIds.length === 0 || p.productIds.includes(r.productId)),
++      );
++    }
++  }
++}
++
++export function priceRows(
++  inputRows: PricedRow[],
++  promos: PromoInfo[],
++  voucherCode: string | undefined,
++  now: Date,
++): PricingResult {
++  const rows = inputRows.map((r) => ({ ...r }));
++  const subtotal = rows.reduce((s, r) => s + rowGross(r), 0);
++  const applied: AppliedPromo[] = [];
++
++  const code = voucherCode?.trim().toUpperCase() || undefined;
++  const voucher = code ? promos.find((p) => p.code.toUpperCase() === code) : undefined;
++  if (code && !voucher) {
++    throw new BadRequestException('Mã khuyến mãi không hợp lệ hoặc chương trình không còn hoạt động');
++  }
++
++  // Tự động: chương trình không cần mã, xếp theo ngày bắt đầu rồi theo mã để kết quả ổn định
++  const auto = promos
++    .filter((p) => !p.requiresCode && p.id !== voucher?.id)
++    .sort((a, b) => a.startDate.getTime() - b.startDate.getTime() || a.code.localeCompare(b.code));
++  const queue: { promo: PromoInfo; isVoucher: boolean }[] = [
++    ...auto.map((promo) => ({ promo, isVoucher: false })),
++    ...(voucher ? [{ promo: voucher, isVoucher: true }] : []),
++  ];
++
++  for (const { promo, isVoucher } of queue) {
++    const reason = promoRejectReason(promo, now, subtotal);
++    const eligible = reason ? [] : eligibleRows(promo, rows, now);
++    const base = eligible.reduce((s, r) => s + rowNet(r), 0);
++
++    if (reason || base <= 0) {
++      // Voucher khách nhập mà không dùng được -> báo lỗi; chương trình tự động -> bỏ qua
++      if (isVoucher) {
++        throw new BadRequestException(reason ?? 'Mã khuyến mãi không áp dụng cho sản phẩm nào trong đơn');
++      }
++      continue;
++    }
++
++    let discount =
++      promo.discountType === 'percentage' ? Math.round((base * promo.value) / 100) : Math.round(promo.value);
++    if (promo.discountType === 'percentage' && promo.maxDiscountAmount != null) {
++      discount = Math.min(discount, Math.round(promo.maxDiscountAmount));
++    }
++    discount = Math.min(discount, base);
++    if (discount <= 0) continue;
++
++    // Phân bổ theo tỷ lệ giá trị còn lại của từng dòng; dòng cuối nhận phần dư
++    let left = discount;
++    eligible.forEach((r, i) => {
++      const share = i === eligible.length - 1 ? left : Math.min(left, Math.round((discount * rowNet(r)) / base));
++      r.promoDiscount += share;
++      left -= share;
++    });
++
++    applied.push({ promotionId: promo.id, code: promo.code, name: promo.name, discountAmount: discount });
++  }
++
++  const productDiscount = rows.reduce((s, r) => s + r.productDiscount, 0);
++  const promoDiscount = rows.reduce((s, r) => s + r.promoDiscount, 0);
++  return {
++    rows,
++    subtotal,
++    productDiscount,
++    promoDiscount,
++    discountAmount: productDiscount + promoDiscount,
++    finalTotal: Math.max(0, subtotal - productDiscount - promoDiscount),
++    applied,
++  };
++}
++
++// ───────────────────────── 3. Thanh toán ─────────────────────────
++
++export interface PaymentInput {
++  method: PayMethod;
++  amount: number; // tiền mặt = số khách đưa; chuyển khoản/thẻ = số tiền giao dịch
++  reference?: string;
++}
++
++export interface SettledPayments {
++  rows: { method: PayMethod; amount: number; reference?: string }[];
++  paymentMethod: PayMethod | 'mixed';
++  receivedAmount: number; // tổng khách đưa
++  changeAmount: number; // tiền thối (chỉ tiền mặt)
++}
++
++export function settlePayments(finalTotal: number, inputs: PaymentInput[]): SettledPayments {
++  const sum = (m: PayMethod) => inputs.filter((p) => p.method === m).reduce((s, p) => s + p.amount, 0);
++  const cashGiven = sum('cash');
++  const transfer = sum('transfer');
++  const card = sum('card');
++  const nonCash = transfer + card;
++
++  for (const p of inputs) {
++    if ((p.method === 'transfer' || p.method === 'card') && p.amount > 0 && !p.reference?.trim()) {
++      throw new BadRequestException(
++        p.method === 'transfer'
++          ? 'Vui lòng nhập mã giao dịch chuyển khoản để xác nhận đã nhận tiền'
++          : 'Vui lòng nhập mã chuẩn chi thẻ',
++      );
++    }
++  }
++  if (nonCash > finalTotal) {
++    throw new BadRequestException('Tổng chuyển khoản + thẻ không được vượt quá số tiền phải trả');
++  }
++  const received = cashGiven + nonCash;
++  if (received < finalTotal) {
++    throw new BadRequestException('Số tiền thanh toán chưa đủ để hoàn tất hóa đơn');
++  }
++
++  const change = received - finalTotal; // luôn <= cashGiven vì nonCash <= finalTotal
++  const cashApplied = cashGiven - change;
++
++  const rows: SettledPayments['rows'] = [];
++  if (cashApplied > 0) rows.push({ method: 'cash', amount: cashApplied });
++  for (const p of inputs) {
++    if (p.method !== 'cash' && p.amount > 0) {
++      rows.push({ method: p.method, amount: p.amount, reference: p.reference!.trim() });
++    }
++  }
++  // Hóa đơn 0đ (giảm giá hết) không có khoản thanh toán nào; còn lại phải có ít nhất 1 khoản
++  if (rows.length === 0 && finalTotal > 0) {
++    throw new BadRequestException('Hóa đơn phải có ít nhất một khoản thanh toán');
++  }
++
++  const methods = new Set(rows.map((r) => r.method));
++  return {
++    rows,
++    paymentMethod: methods.size > 1 ? 'mixed' : (rows[0]?.method ?? 'cash'),
++    receivedAmount: received,
++    changeAmount: change,
++  };
++}
+diff --git a/server/src/invoices/invoices.controller.ts b/server/src/invoices/invoices.controller.ts
+new file mode 100644
+index 0000000..05dd838
+--- /dev/null
++++ b/server/src/invoices/invoices.controller.ts
+@@ -0,0 +1,59 @@
++import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
++import { Roles } from '../auth/decorators/roles.decorator';
++import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
++import { RolesGuard } from '../auth/guards/roles.guard';
++import {
++  ApproveInvoiceDto,
++  CreateInvoiceDto,
++  PreviewInvoiceDto,
++  QueryInvoiceDto,
++} from './dto/invoice.dto';
++import { InvoicesService } from './invoices.service';
++
++type AuthedRequest = { user: { id: string; username: string; role: string } };
++
++@Controller('invoices')
++@UseGuards(JwtAuthGuard, RolesGuard)
++export class InvoicesController {
++  constructor(private readonly invoicesService: InvoicesService) {}
++
++  /** Tính thử tiền + khuyến mãi cho giỏ hàng (không ghi DB) */
++  @Post('preview')
++  @Roles('manager', 'cashier')
++  preview(@Body() dto: PreviewInvoiceDto) {
++    return this.invoicesService.preview(dto);
++  }
++
++  /** Lập hóa đơn + thanh toán + trừ kho (thu ngân = người đang đăng nhập) */
++  @Post()
++  @Roles('manager', 'cashier')
++  create(@Body() dto: CreateInvoiceDto, @Req() req: AuthedRequest) {
++    return this.invoicesService.create(dto, req.user.id);
++  }
++
++  @Get()
++  @Roles('manager', 'cashier')
++  findAll(@Query() query: QueryInvoiceDto) {
++    return this.invoicesService.findAll(query);
++  }
++
++  @Get(':id')
++  @Roles('manager', 'cashier')
++  findOne(@Param('id') id: string) {
++    return this.invoicesService.findOne(id);
++  }
++
++  /** Đổi trả hàng - chỉ quản lý */
++  @Post(':id/return')
++  @Roles('manager')
++  returnInvoice(@Param('id') id: string, @Body() dto: ApproveInvoiceDto, @Req() req: AuthedRequest) {
++    return this.invoicesService.approve(id, 'return', dto, req.user);
++  }
++
++  /** Hủy hóa đơn - chỉ quản lý */
++  @Post(':id/cancel')
++  @Roles('manager')
++  cancelInvoice(@Param('id') id: string, @Body() dto: ApproveInvoiceDto, @Req() req: AuthedRequest) {
++    return this.invoicesService.approve(id, 'cancel', dto, req.user);
++  }
++}
+diff --git a/server/src/invoices/invoices.module.ts b/server/src/invoices/invoices.module.ts
+new file mode 100644
+index 0000000..a81fe0f
+--- /dev/null
++++ b/server/src/invoices/invoices.module.ts
+@@ -0,0 +1,11 @@
++import { Module } from '@nestjs/common';
++import { PromotionsModule } from '../promotions/promotions.module';
++import { InvoicesController } from './invoices.controller';
++import { InvoicesService } from './invoices.service';
++
++@Module({
++  imports: [PromotionsModule],
++  controllers: [InvoicesController],
++  providers: [InvoicesService],
++})
++export class InvoicesModule {}
+diff --git a/server/src/invoices/invoices.service.ts b/server/src/invoices/invoices.service.ts
+new file mode 100644
+index 0000000..eb4db9a
+--- /dev/null
++++ b/server/src/invoices/invoices.service.ts
+@@ -0,0 +1,372 @@
++import {
++  BadRequestException,
++  ConflictException,
++  ForbiddenException,
++  Injectable,
++  NotFoundException,
++} from '@nestjs/common';
++import { Prisma } from '@prisma/client';
++import { PrismaService } from '../prisma/prisma.service';
++import { PromotionsService } from '../promotions/promotions.service';
++import {
++  ApproveInvoiceDto,
++  CreateInvoiceDto,
++  PreviewInvoiceDto,
++  QueryInvoiceDto,
++} from './dto/invoice.dto';
++import {
++  PricingResult,
++  ProductInfo,
++  PromoInfo,
++  allocateFefo,
++  priceRows,
++  settlePayments,
++} from './invoice-pricing';
++
++type Db = Prisma.TransactionClient | PrismaService;
++
++const INVOICE_INCLUDE = {
++  staff: { select: { id: true, code: true, name: true } },
++  invoice_items: {
++    include: {
++      products: { select: { code: true, name: true, unit: true } },
++      batches: { select: { batchCode: true } },
++    },
++  },
++  invoice_payments: true,
++  invoice_promotions: { include: { promotions: { select: { code: true, name: true } } } },
++  invoice_approvals: true,
++} satisfies Prisma.invoicesInclude;
++
++const isUniqueViolation = (e: unknown, field: string) =>
++  e instanceof Prisma.PrismaClientKnownRequestError &&
++  e.code === 'P2002' &&
++  String(e.meta?.target ?? '').includes(field);
++
++@Injectable()
++export class InvoicesService {
++  constructor(
++    private readonly prisma: PrismaService,
++    private readonly promotions: PromotionsService,
++  ) {}
++
++  // ───────────────────────── Tính tiền ─────────────────────────
++
++  /** Đọc sản phẩm, lô, khuyến mãi rồi tính giá. Dùng chung cho preview và create. */
++  private async buildPricing(db: Db, dto: PreviewInvoiceDto, now: Date) {
++    const ids = [...new Set(dto.items.map((i) => i.productId))];
++    const productRows = await db.products.findMany({ where: { id: { in: ids } } });
++    if (productRows.length !== ids.length) {
++      throw new NotFoundException('Có sản phẩm trong giỏ không tồn tại');
++    }
++    const inactive = productRows.find((p) => p.status !== 'active');
++    if (inactive) {
++      throw new BadRequestException(`Sản phẩm "${inactive.name}" đã ngừng kinh doanh`);
++    }
++
++    const products = new Map<string, ProductInfo>(
++      productRows.map((p) => [
++        p.id,
++        {
++          id: p.id,
++          code: p.code,
++          name: p.name,
++          unit: p.unit,
++          category: p.category,
++          sellingPrice: Number(p.sellingPrice),
++          discountPercent: p.discountPercent == null ? 0 : Number(p.discountPercent),
++        },
++      ]),
++    );
++
++    const batches = (
++      await db.batches.findMany({
++        where: { productId: { in: ids }, quantity: { gt: 0 }, expiryDate: { gt: now } },
++      })
++    ).map((b) => ({
++      id: b.id,
++      batchCode: b.batchCode,
++      productId: b.productId,
++      expiryDate: b.expiryDate,
++      quantity: b.quantity,
++    }));
++
++    const promos = await this.promotions.findActiveStatus(db);
++    const rows = allocateFefo(dto.items, products, batches, now);
++    const pricing = priceRows(rows, promos, dto.voucherCode, now);
++    return { products, promos, pricing };
++  }
++
++  private toPreview(pricing: PricingResult, voucherCode?: string) {
++    return {
++      items: pricing.rows.map((r) => ({
++        productId: r.productId,
++        batchId: r.batchId,
++        batchCode: r.batchCode,
++        quantity: r.quantity,
++        unitPrice: r.unitPrice,
++        discount: r.productDiscount + r.promoDiscount,
++        subtotal: r.unitPrice * r.quantity - r.productDiscount - r.promoDiscount,
++      })),
++      subtotal: pricing.subtotal,
++      productDiscount: pricing.productDiscount,
++      promotionDiscount: pricing.promoDiscount,
++      discountAmount: pricing.discountAmount,
++      finalTotal: pricing.finalTotal,
++      appliedPromotions: pricing.applied,
++      voucherCode: pricing.applied.some((a) => a.code.toUpperCase() === voucherCode?.trim().toUpperCase())
++        ? voucherCode!.trim().toUpperCase()
++        : undefined,
++    };
++  }
++
++  /** Tính thử giỏ hàng + khuyến mãi, KHÔNG ghi DB. */
++  async preview(dto: PreviewInvoiceDto) {
++    const { pricing } = await this.buildPricing(this.prisma, dto, new Date());
++    return this.toPreview(pricing, dto.voucherCode);
++  }
++
++  // ───────────────────────── Lập hóa đơn + thanh toán ─────────────────────────
++
++  private async nextInvoiceCode(now: Date) {
++    const ymd = new Intl.DateTimeFormat('en-CA', {
++      timeZone: 'Asia/Ho_Chi_Minh',
++      year: 'numeric',
++      month: '2-digit',
++      day: '2-digit',
++    })
++      .format(now)
++      .replace(/-/g, '');
++    const prefix = `HD-${ymd}-`;
++    const last = await this.prisma.invoices.findFirst({
++      where: { code: { startsWith: prefix } },
++      orderBy: { code: 'desc' },
++      select: { code: true },
++    });
++    const lastSeq = last ? parseInt(last.code.slice(prefix.length), 10) : 0;
++    const seq = (Number.isNaN(lastSeq) ? 0 : lastSeq) + 1;
++    return `${prefix}${String(seq).padStart(3, '0')}`;
++  }
++
++  async create(dto: CreateInvoiceDto, cashierId: string) {
++    const cashier = await this.prisma.staff.findUnique({
++      where: { id: cashierId },
++      select: { id: true, status: true },
++    });
++    if (!cashier || cashier.status !== 'active') {
++      throw new ForbiddenException('Tài khoản thu ngân không hợp lệ hoặc đã bị khóa');
++    }
++
++    // Trùng mã hóa đơn do 2 quầy bán cùng lúc: sinh mã lại rồi làm lại cả giao dịch
++    for (let attempt = 0; attempt < 5; attempt++) {
++      const now = new Date();
++      const code = await this.nextInvoiceCode(now);
++      try {
++        return await this.prisma.$transaction((tx) => this.createInTx(tx, dto, cashierId, code, now), {
++          timeout: 20000,
++        });
++      } catch (e) {
++        if (isUniqueViolation(e, 'code')) continue;
++        throw e;
++      }
++    }
++    throw new ConflictException('Không thể sinh mã hóa đơn, vui lòng thử lại');
++  }
++
++  private async createInTx(
++    tx: Prisma.TransactionClient,
++    dto: CreateInvoiceDto,
++    cashierId: string,
++    code: string,
++    now: Date,
++  ) {
++    const { promos, pricing } = await this.buildPricing(tx, dto, now);
++    const settled = settlePayments(pricing.finalTotal, dto.payments);
++
++    // Một mã giao dịch chuyển khoản chỉ được dùng cho một hóa đơn còn hiệu lực
++    for (const p of settled.rows.filter((r) => r.method === 'transfer')) {
++      const dup = await tx.invoice_payments.findFirst({
++        where: {
++          method: 'transfer',
++          reference: p.reference,
++          invoices: { status: { in: ['completed', 'pending_payment', 'pending_approval'] } },
++        },
++        select: { id: true },
++      });
++      if (dup) {
++        throw new ConflictException(`Mã giao dịch chuyển khoản "${p.reference}" đã được dùng cho hóa đơn khác`);
++      }
++    }
++
++    // Trừ kho đúng lô đã phân bổ. updateMany có điều kiện để 2 quầy không bán trùng tồn.
++    for (const r of pricing.rows) {
++      const res = await tx.batches.updateMany({
++        where: { id: r.batchId, quantity: { gte: r.quantity } },
++        data: { quantity: { decrement: r.quantity } },
++      });
++      if (res.count === 0) {
++        throw new ConflictException(`Lô ${r.batchCode} vừa hết hàng hoặc không đủ tồn, vui lòng thử lại`);
++      }
++    }
++
++    // Tăng lượt dùng khuyến mãi (chặn vượt usageLimit khi nhiều quầy cùng dùng)
++    const promoById = new Map<string, PromoInfo>(promos.map((p) => [p.id, p]));
++    for (const a of pricing.applied) {
++      const p = promoById.get(a.promotionId)!;
++      const res = await tx.promotions.updateMany({
++        where: { id: p.id, ...(p.usageLimit != null && { usedCount: { lt: p.usageLimit } }) },
++        data: { usedCount: { increment: 1 } },
++      });
++      if (res.count === 0) throw new ConflictException(`Khuyến mãi ${p.code} đã hết lượt sử dụng`);
++    }
++
++    const voucher = dto.voucherCode?.trim().toUpperCase();
++    const voucherApplied = voucher && pricing.applied.some((a) => a.code.toUpperCase() === voucher);
++
++    return tx.invoices.create({
++      data: {
++        code,
++        cashierId,
++        subtotal: pricing.subtotal,
++        discountAmount: pricing.discountAmount,
++        voucherCode: voucherApplied ? voucher : null,
++        finalTotal: pricing.finalTotal,
++        paymentMethod: settled.paymentMethod,
++        receivedAmount: settled.receivedAmount,
++        changeAmount: settled.changeAmount,
++        paidAt: now,
++        status: 'completed',
++        notes: dto.notes?.trim() || null,
++        invoice_items: {
++          create: pricing.rows.map((r) => {
++            const discount = r.productDiscount + r.promoDiscount;
++            return {
++              productId: r.productId,
++              batchId: r.batchId,
++              quantity: r.quantity,
++              unitPrice: r.unitPrice,
++              discount,
++              subtotal: r.unitPrice * r.quantity - discount,
++            };
++          }),
++        },
++        invoice_payments: {
++          create: settled.rows.map((p) => ({
++            method: p.method,
++            amount: p.amount,
++            status: 'confirmed' as const,
++            reference: p.reference ?? null,
++            confirmedById: cashierId,
++            confirmedAt: now,
++          })),
++        },
++        invoice_promotions: {
++          create: pricing.applied.map((a) => ({
++            promotionId: a.promotionId,
++            discountAmount: a.discountAmount,
++          })),
++        },
++      },
++      include: INVOICE_INCLUDE,
++    });
++  }
++
++  // ───────────────────────── Tra cứu hóa đơn ─────────────────────────
++
++  findAll(query: QueryInvoiceDto) {
++    return this.prisma.invoices.findMany({
++      where: {
++        ...(query.status && { status: query.status }),
++        ...(query.search && { code: { contains: query.search.trim(), mode: 'insensitive' } }),
++      },
++      include: INVOICE_INCLUDE,
++      orderBy: { createdAt: 'desc' },
++      take: query.limit,
++    });
++  }
++
++  async findOne(id: string) {
++    const invoice = await this.prisma.invoices.findUnique({ where: { id }, include: INVOICE_INCLUDE });
++    if (!invoice) throw new NotFoundException('Không tìm thấy hóa đơn');
++    return invoice;
++  }
++
++  // ───────────────────────── Đổi trả / hủy hóa đơn ─────────────────────────
++
++  /**
++   * Quản lý duyệt đổi trả hoặc hủy NGUYÊN hóa đơn:
++   *  - hóa đơn chuyển sang returned / cancelled
++   *  - hoàn lại tồn kho đúng lô đã bán
++   *  - trả lại lượt dùng khuyến mãi
++   *  - lưu vết duyệt + hoàn tiền vào invoice_approvals
++   */
++  async approve(
++    id: string,
++    action: 'return' | 'cancel',
++    dto: ApproveInvoiceDto,
++    user: { id: string; role: string },
++  ) {
++    if (dto.refundMethod === 'transfer' && !dto.refundRef?.trim()) {
++      throw new BadRequestException('Vui lòng nhập mã giao dịch hoàn tiền chuyển khoản');
++    }
++
++    return this.prisma.$transaction(async (tx) => {
++      // Kiểm tra quyền theo dữ liệu thật, không tin hoàn toàn vào role trong token
++      const approver = await tx.staff.findUnique({
++        where: { id: user.id },
++        select: { id: true, role: true, status: true },
++      });
++      if (!approver || approver.status !== 'active' || approver.role !== 'manager') {
++        throw new ForbiddenException('Chỉ quản lý mới được duyệt đổi trả / hủy hóa đơn');
++      }
++
++      const invoice = await tx.invoices.findUnique({
++        where: { id },
++        include: { invoice_items: true, invoice_promotions: true },
++      });
++      if (!invoice) throw new NotFoundException('Không tìm thấy hóa đơn');
++
++      const label = action === 'return' ? 'Đã trả hàng' : 'Đã hủy';
++      // Chuyển trạng thái có điều kiện: 2 người cùng bấm thì chỉ một người thành công
++      const moved = await tx.invoices.updateMany({
++        where: { id, status: 'completed' },
++        data: {
++          status: action === 'return' ? 'returned' : 'cancelled',
++          notes: `${invoice.notes ?? ''} [${label}: ${dto.reason.trim()}]`.trim(),
++        },
++      });
++      if (moved.count === 0) {
++        throw new ConflictException('Chỉ hóa đơn đã hoàn tất mới được đổi trả / hủy (có thể đã được xử lý trước đó)');
++      }
++
++      for (const item of invoice.invoice_items) {
++        if (!item.batchId) continue;
++        await tx.batches.update({
++          where: { id: item.batchId },
++          data: { quantity: { increment: item.quantity } },
++        });
++      }
++
++      for (const ip of invoice.invoice_promotions) {
++        await tx.promotions.updateMany({
++          where: { id: ip.promotionId, usedCount: { gt: 0 } },
++          data: { usedCount: { decrement: 1 } },
++        });
++      }
++
++      await tx.invoice_approvals.create({
++        data: {
++          invoiceId: id,
++          action,
++          reason: dto.reason.trim(),
++          refundAmount: invoice.finalTotal,
++          refundMethod: dto.refundMethod,
++          refundRef: dto.refundMethod === 'transfer' ? dto.refundRef!.trim() : null,
++          approvedById: approver.id,
++        },
++      });
++
++      return tx.invoices.findUniqueOrThrow({ where: { id }, include: INVOICE_INCLUDE });
++    });
++  }
++}
+diff --git a/server/src/promotions/promotions.controller.ts b/server/src/promotions/promotions.controller.ts
+new file mode 100644
+index 0000000..59f0871
+--- /dev/null
++++ b/server/src/promotions/promotions.controller.ts
+@@ -0,0 +1,15 @@
++import { Controller, Get, UseGuards } from '@nestjs/common';
++import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
++import { PromotionsService } from './promotions.service';
++
++@Controller('promotions')
++@UseGuards(JwtAuthGuard)
++export class PromotionsController {
++  constructor(private readonly promotionsService: PromotionsService) {}
++
++  /** Khuyến mãi đang chạy, còn lượt dùng (POS hiển thị chương trình đang áp dụng) */
++  @Get('active')
++  listActive() {
++    return this.promotionsService.listForPos();
++  }
++}
+diff --git a/server/src/promotions/promotions.module.ts b/server/src/promotions/promotions.module.ts
+new file mode 100644
+index 0000000..b255675
+--- /dev/null
++++ b/server/src/promotions/promotions.module.ts
+@@ -0,0 +1,10 @@
++import { Module } from '@nestjs/common';
++import { PromotionsController } from './promotions.controller';
++import { PromotionsService } from './promotions.service';
++
++@Module({
++  controllers: [PromotionsController],
++  providers: [PromotionsService],
++  exports: [PromotionsService],
++})
++export class PromotionsModule {}
+diff --git a/server/src/promotions/promotions.service.ts b/server/src/promotions/promotions.service.ts
+new file mode 100644
+index 0000000..cb54740
+--- /dev/null
++++ b/server/src/promotions/promotions.service.ts
+@@ -0,0 +1,61 @@
++import { Injectable } from '@nestjs/common';
++import { Prisma } from '@prisma/client';
++import { PrismaService } from '../prisma/prisma.service';
++import { PromoInfo } from '../invoices/invoice-pricing';
++
++type PromoRow = Prisma.promotionsGetPayload<{ include: { promotion_products: true } }>;
++
++export const toPromoInfo = (p: PromoRow): PromoInfo => ({
++  id: p.id,
++  code: p.code,
++  name: p.name,
++  scope: p.scope,
++  discountType: p.discountType,
++  value: Number(p.value),
++  maxDiscountAmount: p.maxDiscountAmount == null ? null : Number(p.maxDiscountAmount),
++  startDate: p.startDate,
++  endDate: p.endDate,
++  minOrderValue: Number(p.minOrderValue),
++  applicableCategory: p.applicableCategory,
++  nearExpiryDays: p.nearExpiryDays,
++  requiresCode: p.requiresCode,
++  usageLimit: p.usageLimit,
++  usedCount: p.usedCount,
++  status: p.status,
++  productIds: p.promotion_products.map((x) => x.productId),
++});
++
++@Injectable()
++export class PromotionsService {
++  constructor(private readonly prisma: PrismaService) {}
++
++  /**
++   * Mọi chương trình có status = active (chưa lọc theo ngày/lượt dùng).
++   * Việc kiểm tra ngày, lượt dùng, điều kiện đơn tối thiểu do invoice-pricing xử lý
++   * để báo đúng lý do khi thu ngân nhập mã không dùng được.
++   */
++  async findActiveStatus(db: Prisma.TransactionClient | PrismaService = this.prisma) {
++    const rows = await db.promotions.findMany({
++      where: { status: 'active' },
++      include: { promotion_products: true },
++      orderBy: { startDate: 'asc' },
++    });
++    return rows.map(toPromoInfo);
++  }
++
++  /** Các chương trình đang chạy (status = active) và còn trong thời gian hiệu lực. */
++  async findRunning(now = new Date(), db: Prisma.TransactionClient | PrismaService = this.prisma) {
++    const rows = await db.promotions.findMany({
++      where: { status: 'active', startDate: { lte: now }, endDate: { gte: now } },
++      include: { promotion_products: true },
++      orderBy: { startDate: 'asc' },
++    });
++    return rows.map(toPromoInfo);
++  }
++
++  /** Dữ liệu trả về cho màn hình POS (không lộ thông tin nội bộ) */
++  async listForPos() {
++    const running = await this.findRunning();
++    return running.filter((p) => p.usageLimit == null || p.usedCount < p.usageLimit);
++  }
++}
+diff --git a/server/test/invoice-pricing.test.ts b/server/test/invoice-pricing.test.ts
+new file mode 100644
+index 0000000..3b7e1a8
+--- /dev/null
++++ b/server/test/invoice-pricing.test.ts
+@@ -0,0 +1,150 @@
++/**
++ * Test logic tính giá bán hàng (không cần DB):  npx ts-node test/invoice-pricing.test.ts
++ */
++import { strict as assert } from 'node:assert';
++import {
++  BatchInfo,
++  ProductInfo,
++  PromoInfo,
++  allocateFefo,
++  priceRows,
++  settlePayments,
++} from '../src/invoices/invoice-pricing';
++
++const NOW = new Date('2026-10-15T03:00:00Z');
++const day = (n: number) => new Date(NOW.getTime() + n * 86400000);
++
++const milk: ProductInfo = { id: 'p-milk', code: 'MILK', name: 'Sữa dâu', unit: 'Lốc', category: 'SUA_TUOI_TIET_TRUNG', sellingPrice: 38000, discountPercent: 0 };
++const yogurt: ProductInfo = { id: 'p-yog', code: 'YOG', name: 'Sữa chua', unit: 'Vỉ', category: 'SUA_CHUA', sellingPrice: 30000, discountPercent: 10 };
++const products = new Map([milk, yogurt].map((p) => [p.id, p]));
++
++const batches: BatchInfo[] = [
++  { id: 'b-old', batchCode: 'OLD', productId: 'p-milk', expiryDate: day(10), quantity: 3 },
++  { id: 'b-new', batchCode: 'NEW', productId: 'p-milk', expiryDate: day(90), quantity: 10 },
++  { id: 'b-exp', batchCode: 'EXPIRED', productId: 'p-milk', expiryDate: day(-1), quantity: 50 },
++  { id: 'b-yog', batchCode: 'YOG1', productId: 'p-yog', expiryDate: day(20), quantity: 20 },
++];
++
++const promo = (o: Partial<PromoInfo>): PromoInfo => ({
++  id: 'x', code: 'X', name: 'KM', scope: 'order', discountType: 'fixed_amount', value: 20000,
++  maxDiscountAmount: null, startDate: day(-5), endDate: day(5), minOrderValue: 0,
++  applicableCategory: null, nearExpiryDays: null, requiresCode: false, usageLimit: null,
++  usedCount: 0, status: 'active', productIds: [], ...o,
++});
++
++let n = 0;
++const t = (name: string, fn: () => void) => { fn(); n++; console.log('  ok  ' + name); };
++
++// ── FEFO ──
++t('FEFO: lấy lô hết hạn trước, bỏ qua lô quá hạn, chia nhiều lô', () => {
++  const rows = allocateFefo([{ productId: 'p-milk', quantity: 5 }], products, batches, NOW);
++  assert.deepEqual(rows.map((r) => [r.batchCode, r.quantity]), [['OLD', 3], ['NEW', 2]]);
++});
++t('FEFO: gộp 2 dòng trùng sản phẩm', () => {
++  const rows = allocateFefo([{ productId: 'p-milk', quantity: 1 }, { productId: 'p-milk', quantity: 1 }], products, batches, NOW);
++  assert.equal(rows.reduce((s, r) => s + r.quantity, 0), 2);
++});
++t('FEFO: không đủ tồn (lô quá hạn không tính) -> lỗi', () => {
++  assert.throws(() => allocateFefo([{ productId: 'p-milk', quantity: 14 }], products, batches, NOW), /không đủ tồn kho/);
++});
++
++// ── Giá & khuyến mãi ──
++t('Giảm giá riêng sản phẩm 10% (làm tròn theo đơn vị)', () => {
++  const rows = allocateFefo([{ productId: 'p-yog', quantity: 2 }], products, batches, NOW);
++  const r = priceRows(rows, [], undefined, NOW);
++  assert.equal(r.subtotal, 60000);
++  assert.equal(r.productDiscount, 6000);
++  assert.equal(r.finalTotal, 54000);
++});
++t('Voucher cố định THVIP20K: đủ điều kiện', () => {
++  const rows = allocateFefo([{ productId: 'p-milk', quantity: 6 }], products, batches, NOW); // 228k
++  const r = priceRows(rows, [promo({ code: 'THVIP20K', requiresCode: true, minOrderValue: 200000 })], 'thvip20k', NOW);
++  assert.equal(r.promoDiscount, 20000);
++  assert.equal(r.finalTotal, 208000);
++  assert.equal(r.rows.reduce((s, x) => s + x.promoDiscount, 0), 20000); // phân bổ đủ vào các dòng
++});
++t('Voucher: dưới giá trị tối thiểu -> lỗi', () => {
++  const rows = allocateFefo([{ productId: 'p-milk', quantity: 2 }], products, batches, NOW);
++  assert.throws(() => priceRows(rows, [promo({ code: 'V', requiresCode: true, minOrderValue: 200000 })], 'V', NOW), /phải từ 200\.000/);
++});
++t('Voucher: mã sai -> lỗi', () => {
++  const rows = allocateFefo([{ productId: 'p-milk', quantity: 1 }], products, batches, NOW);
++  assert.throws(() => priceRows(rows, [], 'NOPE', NOW), /không hợp lệ/);
++});
++t('Voucher: hết lượt dùng -> lỗi; chương trình tự động hết lượt -> bỏ qua', () => {
++  const rows = allocateFefo([{ productId: 'p-milk', quantity: 1 }], products, batches, NOW);
++  const full = { usageLimit: 1, usedCount: 1 };
++  assert.throws(() => priceRows(rows, [promo({ code: 'V', requiresCode: true, ...full })], 'V', NOW), /hết lượt/);
++  assert.equal(priceRows(rows, [promo({ code: 'AUTO', ...full })], undefined, NOW).promoDiscount, 0);
++});
++t('Voucher: ngoài thời gian hiệu lực -> lỗi', () => {
++  const rows = allocateFefo([{ productId: 'p-milk', quantity: 1 }], products, batches, NOW);
++  assert.throws(() => priceRows(rows, [promo({ code: 'V', requiresCode: true, endDate: day(-1) })], 'V', NOW), /đã kết thúc/);
++});
++t('Tự động theo nhóm hàng: chỉ giảm dòng thuộc nhóm SUA_CHUA', () => {
++  const rows = allocateFefo([{ productId: 'p-milk', quantity: 3 }, { productId: 'p-yog', quantity: 4 }], products, batches, NOW);
++  // yogurt: 120k - 12k (giảm riêng) = 108k -> 10% = 10.800
++  const r = priceRows(rows, [promo({ scope: 'category', applicableCategory: 'SUA_CHUA', discountType: 'percentage', value: 10, minOrderValue: 100000 })], undefined, NOW);
++  assert.equal(r.promoDiscount, 10800);
++  assert.equal(r.rows.filter((x) => x.productId === 'p-milk').every((x) => x.promoDiscount === 0), true);
++});
++t('Giảm % có trần maxDiscountAmount', () => {
++  const rows = allocateFefo([{ productId: 'p-milk', quantity: 10 }], products, batches, NOW); // 380k
++  const r = priceRows(rows, [promo({ discountType: 'percentage', value: 50, maxDiscountAmount: 30000 })], undefined, NOW);
++  assert.equal(r.promoDiscount, 30000);
++});
++t('Giảm cố định không vượt quá giá trị hàng đủ điều kiện', () => {
++  const rows = allocateFefo([{ productId: 'p-milk', quantity: 1 }], products, batches, NOW); // 38k
++  const r = priceRows(rows, [promo({ value: 100000 })], undefined, NOW);
++  assert.equal(r.promoDiscount, 38000);
++  assert.equal(r.finalTotal, 0);
++});
++t('near_expiry: chỉ giảm lô còn <= N ngày', () => {
++  const rows = allocateFefo([{ productId: 'p-milk', quantity: 5 }], products, batches, NOW); // OLD(3,10 ngày) + NEW(2,90 ngày)
++  const r = priceRows(rows, [promo({ scope: 'near_expiry', nearExpiryDays: 30, discountType: 'percentage', value: 20 })], undefined, NOW);
++  assert.equal(r.promoDiscount, Math.round(3 * 38000 * 0.2));
++  assert.equal(r.rows.find((x) => x.batchCode === 'NEW')!.promoDiscount, 0);
++});
++t('Nhiều khuyến mãi chồng nhau: tổng phân bổ == tổng giảm, không âm', () => {
++  const rows = allocateFefo([{ productId: 'p-milk', quantity: 5 }, { productId: 'p-yog', quantity: 1 }], products, batches, NOW);
++  const r = priceRows(rows, [promo({ id: 'a', code: 'A', discountType: 'percentage', value: 33 }), promo({ id: 'b', code: 'B', value: 7777 })], undefined, NOW);
++  assert.equal(r.rows.reduce((s, x) => s + x.promoDiscount, 0), r.promoDiscount);
++  assert.equal(r.applied.length, 2);
++  assert.ok(r.rows.every((x) => x.unitPrice * x.quantity - x.productDiscount - x.promoDiscount >= 0));
++});
++
++// ── Thanh toán ──
++t('Tiền mặt dư -> có tiền thối, ghi nhận tiền mặt sau khi trừ thối', () => {
++  const s = settlePayments(228000, [{ method: 'cash', amount: 500000 }]);
++  assert.equal(s.changeAmount, 272000);
++  assert.deepEqual(s.rows, [{ method: 'cash', amount: 228000 }]);
++  assert.equal(s.paymentMethod, 'cash');
++});
++t('Thanh toán nhiều hình thức -> mixed', () => {
++  const s = settlePayments(500000, [
++    { method: 'transfer', amount: 300000, reference: 'FT123' },
++    { method: 'cash', amount: 200000 },
++  ]);
++  assert.equal(s.paymentMethod, 'mixed');
++  assert.equal(s.changeAmount, 0);
++  assert.equal(s.rows.length, 2);
++});
++t('Chuyển khoản thiếu mã giao dịch -> lỗi', () => {
++  assert.throws(() => settlePayments(100000, [{ method: 'transfer', amount: 100000 }]), /mã giao dịch/);
++});
++t('Thẻ thiếu mã chuẩn chi -> lỗi', () => {
++  assert.throws(() => settlePayments(100000, [{ method: 'card', amount: 100000 }]), /chuẩn chi/);
++});
++t('Chuyển khoản + thẻ vượt tổng tiền -> lỗi', () => {
++  assert.throws(() => settlePayments(100000, [{ method: 'transfer', amount: 150000, reference: 'a' }]), /không được vượt/);
++});
++t('Thanh toán chưa đủ -> lỗi', () => {
++  assert.throws(() => settlePayments(100000, [{ method: 'cash', amount: 99999 }]), /chưa đủ/);
++});
++t('Hóa đơn 0đ -> không có khoản thanh toán, phương thức cash', () => {
++  const s = settlePayments(0, [{ method: 'cash', amount: 0 }]);
++  assert.deepEqual(s.rows, []);
++  assert.equal(s.paymentMethod, 'cash');
++});
++
++console.log(`\n${n} test đạt`);
