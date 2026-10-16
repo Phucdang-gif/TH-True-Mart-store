@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Staff } from '../types';
 import { staffService } from '../services/staff';
-
+import { fetchApi } from "../lib/api";
 export const useStaff = () => {
   const [staffList, setStaffList] = useState<Staff[]>([]);
 
@@ -38,6 +38,5 @@ export const useStaff = () => {
       console.error('Lỗi khi cập nhật ca làm:', error.message);
     }
   };
-
-  return { staffList, addStaff, updateShift };
+  return { staffList, addStaff, updateShift};
 };

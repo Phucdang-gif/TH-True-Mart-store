@@ -8,6 +8,7 @@ import { QuanLyNhaCungCap } from "./components/suppliers/QuanLyNhaCungCap";
 import { BaoCaoThongKe } from "./components/reports/BaoCaoThongKe";
 import { Routes, Route, Navigate } from "react-router-dom";
 import Login from "./components/login/Login";
+import { fetchApi } from "./lib/api";
 import {
   INITIAL_BATCHES,
   INITIAL_STAFF,
@@ -197,7 +198,26 @@ export default function App() {
   const handleCreatePurchaseOrder = (newPO: PurchaseOrder) => {
     setPurchaseOrders((prev) => [newPO, ...prev]);
   };
-
+  const handleSavePermissions = async (
+    permissions: any[],
+    rolePermissions: Record<string, string[]>,
+  ) => {
+    try {
+      await fetchApi("/permissions/save", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token")}`,
+        },
+        body: JSON.stringify({ permissions, rolePermissions }),
+      });
+      return { success: true };
+    } catch (error: any) {
+      return {
+        success: false,
+        message: error.message || "Lưu phân quyền thất bại",
+      };
+    }
+  };
   const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
     const token = localStorage.getItem("access_token");
     if (!token) {

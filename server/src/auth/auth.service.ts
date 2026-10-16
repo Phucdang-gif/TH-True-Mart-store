@@ -20,14 +20,14 @@ export class AuthService {
     });
 
     if (!user) {
-      throw new UnauthorizedException('Sai tài khoản hoặc mật khẩu');
+      throw new UnauthorizedException('Sai tài khoản');
     }
 
     // 2. So sánh mật khẩu bằng bcrypt
     const isPasswordValid = await bcrypt.compare(password, user.password);
     
     if (!isPasswordValid) {
-      throw new UnauthorizedException('Sai tài khoản hoặc mật khẩu');
+      throw new UnauthorizedException('Sai mật khẩu');
     }
 
     // 3. Tách mật khẩu ra, KHÔNG trả về frontend
