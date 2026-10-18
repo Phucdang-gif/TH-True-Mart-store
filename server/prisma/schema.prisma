@@ -11,11 +11,10 @@ model products {
   id                   String                 @id @default(dbgenerated("(gen_random_uuid())::text"))
   code                 String                 @unique
   name                 String
-  category             Category
+  categoryId           String
   unit                 String
   sellingPrice         Decimal                @db.Decimal(12, 2)
   costPrice            Decimal                @db.Decimal(12, 2)
-  discountPercent      Decimal?               @db.Decimal(5, 2)
   minStockLevel        Int                    @default(0)
   description          String?
   imageUrl             String?
@@ -24,9 +23,12 @@ model products {
   updatedAt            DateTime               @default(now())
   batches              batches[]
   invoice_items        invoice_items[]
+  price_history        price_history[]
+  product_categories   product_categories     @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   promotion_products   promotion_products[]
   purchase_order_items purchase_order_items[]
-  stock_audit_items    stock_audit_items[]
+
+  @@index([categoryId])
 }
 
 model promotions {
@@ -38,24 +40,27 @@ model promotions {
   discountType       DiscountType
   value              Decimal              @db.Decimal(12, 2)
   maxDiscountAmount  Decimal?             @db.Decimal(12, 2)
-  startDate          DateTime
-  endDate            DateTime
   minOrderValue      Decimal              @default(0) @db.Decimal(12, 2)
-  applicableCategory Category?
+  categoryId         String?
   nearExpiryDays     Int?
   requiresCode       Boolean              @default(false)
   usageLimit         Int?
   usedCount          Int                  @default(0)
+  startDate          DateTime
+  endDate            DateTime
   status             PromotionStatus      @default(scheduled)
-  createdById        String?
+  statusChangedAt    DateTime?
+  createdById        String
   createdAt          DateTime             @default(now())
   updatedAt          DateTime             @default(now())
   invoice_promotions invoice_promotions[]
   promotion_products promotion_products[]
-  staff              staff?               @relation(fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  product_categories product_categories?  @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  staff              staff                @relation(fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([createdById])
   @@index([status])
+  @@index([categoryId])
 }
 
 model purchase_order_items {
@@ -64,7 +69,7 @@ model purchase_order_items {
   productId       String
   quantity        Int
   unitPrice       Decimal         @db.Decimal(12, 2)
-  subtotal        Decimal         @db.Decimal(12, 2)
+  subtotal        Decimal?        @default(dbgenerated("((quantity)::numeric * \"unitPrice\")")) @db.Decimal(14, 2)
   products        products        @relation(fields: [productId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   purchase_orders purchase_orders @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
@@ -76,65 +81,65 @@ model purchase_orders {
   id                   String                 @id @default(dbgenerated("(gen_random_uuid())::text"))
   orderCode            String                 @unique
   supplierId           String
+  createdById          String
   createdAt            DateTime               @default(now())
   expectedDate         DateTime
   totalAmount          Decimal                @db.Decimal(14, 2)
   status               PurchaseOrderStatus    @default(pending)
   notes                String?
+  goods_receipts       goods_receipts[]
   purchase_order_items purchase_order_items[]
+  staff                staff                  @relation(fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
   suppliers            suppliers              @relation(fields: [supplierId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([supplierId])
+  @@index([createdById])
 }
 
 model staff {
-  id                                              String                  @id @default(dbgenerated("(gen_random_uuid())::text"))
-  code                                            String                  @unique
-  name                                            String
-  phone                                           String
-  username                                        String                  @unique
-  password                                        String
-  role                                            StaffRole
-  roleId                                          String?
-  status                                          StaffStatus             @default(active)
-  shift                                           Shift
-  mustChangePassword                              Boolean                 @default(false)
-  failedLoginCount                                Int                     @default(0)
-  lockedUntil                                     DateTime?
-  lastLoginAt                                     DateTime?
-  passwordChangedAt                               DateTime?
-  createdAt                                       DateTime                @default(now())
-  updatedAt                                       DateTime                @default(now())
-  auth_sessions                                   auth_sessions[]
-  batches                                         batches[]
-  cash_sessions_cash_sessions_cashierIdTostaff    cash_sessions[]         @relation("cash_sessions_cashierIdTostaff")
-  cash_sessions_cash_sessions_reviewedByIdTostaff cash_sessions[]         @relation("cash_sessions_reviewedByIdTostaff")
-  invoice_approvals                               invoice_approvals[]
-  invoice_payments                                invoice_payments[]
-  invoices                                        invoices[]
-  login_logs                                      login_logs[]
-  password_reset_tokens                           password_reset_tokens[]
-  promotions                                      promotions[]
-  roles                                           roles?                  @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  stock_audits_stock_audits_approvedByIdTostaff   stock_audits[]          @relation("stock_audits_approvedByIdTostaff")
-  stock_audits_stock_audits_performedByIdTostaff  stock_audits[]          @relation("stock_audits_performedByIdTostaff")
+  id                                             String             @id @default(dbgenerated("(gen_random_uuid())::text"))
+  code                                           String             @unique
+  name                                           String
+  phone                                          String
+  username                                       String             @unique
+  password                                       String
+  roleId                                         String
+  status                                         StaffStatus        @default(active)
+  mustChangePassword                             Boolean            @default(false)
+  failedLoginCount                               Int                @default(0)
+  lockedUntil                                    DateTime?
+  lastLoginAt                                    DateTime?
+  createdAt                                      DateTime           @default(now())
+  updatedAt                                      DateTime           @default(now())
+  auth_sessions                                  auth_sessions[]
+  goods_receipts                                 goods_receipts[]
+  invoice_payments                               invoice_payments[]
+  invoices                                       invoices[]
+  login_logs                                     login_logs[]
+  price_history                                  price_history[]
+  promotions                                     promotions[]
+  purchase_orders                                purchase_orders[]
+  roles                                          roles              @relation(fields: [roleId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  stock_audits_stock_audits_approvedByIdTostaff  stock_audits[]     @relation("stock_audits_approvedByIdTostaff")
+  stock_audits_stock_audits_performedByIdTostaff stock_audits[]     @relation("stock_audits_performedByIdTostaff")
+  stock_movements                                stock_movements[]
 
   @@index([roleId])
 }
 
 model stock_audit_items {
   id             String       @id @default(dbgenerated("(gen_random_uuid())::text"))
-  stockAuditId   String
-  productId      String
+  auditId        String
+  batchId        String
   systemQuantity Int
   actualQuantity Int
-  difference     Int
-  reason         String
-  products       products     @relation(fields: [productId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  stock_audits   stock_audits @relation(fields: [stockAuditId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  difference     Int?         @default(dbgenerated("(\"actualQuantity\" - \"systemQuantity\")"))
+  reason         String?
+  stock_audits   stock_audits @relation(fields: [auditId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  batches        batches      @relation(fields: [batchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-  @@index([productId])
-  @@index([stockAuditId])
+  @@unique([auditId, batchId])
+  @@index([batchId])
 }
 
 model stock_audits {
@@ -162,33 +167,23 @@ model suppliers {
   address          String
   categoryProvided String
   status           SupplierStatus    @default(active)
+  goods_receipts   goods_receipts[]
   purchase_orders  purchase_orders[]
 }
 
 model login_logs {
-  id        String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  id        String     @id @default(dbgenerated("(gen_random_uuid())::text"))
   staffId   String?
   username  String
+  event     LoginEvent @default(login)
   success   Boolean
   reason    String?
   ipAddress String?
   userAgent String?
-  createdAt DateTime @default(now())
-  staff     staff?   @relation(fields: [staffId], references: [id], onUpdate: NoAction)
+  createdAt DateTime   @default(now())
+  staff     staff?     @relation(fields: [staffId], references: [id], onUpdate: NoAction)
 
   @@index([createdAt])
-  @@index([staffId])
-}
-
-model password_reset_tokens {
-  id        String    @id @default(dbgenerated("(gen_random_uuid())::text"))
-  staffId   String
-  tokenHash String    @unique
-  expiresAt DateTime
-  usedAt    DateTime?
-  createdAt DateTime  @default(now())
-  staff     staff     @relation(fields: [staffId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-
   @@index([staffId])
 }
 
@@ -247,72 +242,33 @@ model auth_sessions {
 }
 
 model batches {
-  id                String          @id @default(dbgenerated("(gen_random_uuid())::text"))
-  batchCode         String          @unique
-  productId         String
-  manufacturingDate DateTime
-  expiryDate        DateTime
-  quantity          Int
-  importPrice       Decimal         @db.Decimal(12, 2)
-  status            BatchStatus     @default(good)
-  receivedById      String?
-  createdAt         DateTime        @default(now())
-  products          products        @relation(fields: [productId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  staff             staff?          @relation(fields: [receivedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  invoice_items     invoice_items[]
+  id                  String                @id @default(dbgenerated("(gen_random_uuid())::text"))
+  batchCode           String                @unique
+  productId           String
+  manufacturingDate   DateTime
+  expiryDate          DateTime
+  quantity            Int                   @default(0)
+  createdAt           DateTime              @default(now())
+  products            products              @relation(fields: [productId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  goods_receipt_items goods_receipt_items[]
+  invoice_items       invoice_items[]
+  stock_audit_items   stock_audit_items[]
+  stock_movements     stock_movements[]
 
   @@index([productId])
-  @@index([receivedById])
-}
-
-model cash_sessions {
-  id                                      String            @id @default(dbgenerated("(gen_random_uuid())::text"))
-  code                                    String            @unique
-  cashierId                               String
-  openedAt                                DateTime          @default(now())
-  openingCash                             Decimal           @default(0) @db.Decimal(12, 2)
-  closedAt                                DateTime?
-  expectedCash                            Decimal?          @db.Decimal(12, 2)
-  countedCash                             Decimal?          @db.Decimal(12, 2)
-  difference                              Decimal?          @db.Decimal(12, 2)
-  differenceReason                        String?
-  reviewedById                            String?
-  status                                  CashSessionStatus @default(open)
-  staff_cash_sessions_cashierIdTostaff    staff             @relation("cash_sessions_cashierIdTostaff", fields: [cashierId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  staff_cash_sessions_reviewedByIdTostaff staff?            @relation("cash_sessions_reviewedByIdTostaff", fields: [reviewedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  invoices                                invoices[]
-
-  @@index([cashierId])
-  @@index([reviewedById])
-}
-
-model invoice_approvals {
-  id           String         @id @default(dbgenerated("(gen_random_uuid())::text"))
-  invoiceId    String
-  action       String
-  reason       String
-  refundAmount Decimal        @default(0) @db.Decimal(12, 2)
-  refundMethod PaymentMethod?
-  refundRef    String?
-  approvedById String
-  createdAt    DateTime       @default(now())
-  staff        staff          @relation(fields: [approvedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  invoices     invoices       @relation(fields: [invoiceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-
-  @@index([approvedById])
-  @@index([invoiceId])
+  @@index([expiryDate])
 }
 
 model invoice_items {
   id                 String               @id @default(dbgenerated("(gen_random_uuid())::text"))
   invoiceId          String
   productId          String
-  batchId            String?
+  batchId            String
   quantity           Int
   unitPrice          Decimal              @db.Decimal(12, 2)
   discount           Decimal              @default(0) @db.Decimal(12, 2)
-  subtotal           Decimal              @db.Decimal(12, 2)
-  batches            batches?             @relation(fields: [batchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  subtotal           Decimal?             @default(dbgenerated("(((quantity)::numeric * \"unitPrice\") - discount)")) @db.Decimal(12, 2)
+  batches            batches              @relation(fields: [batchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   invoices           invoices             @relation(fields: [invoiceId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   products           products             @relation(fields: [productId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   invoice_promotions invoice_promotions[]
@@ -328,7 +284,8 @@ model invoice_payments {
   invoiceId     String
   method        PaymentMethod
   amount        Decimal       @db.Decimal(12, 2)
-  status        PaymentStatus @default(confirmed)
+  cashReceived  Decimal?      @db.Decimal(12, 2)
+  status        PaymentStatus @default(pending)
   reference     String?
   confirmedById String?
   confirmedAt   DateTime?
@@ -359,38 +316,105 @@ model invoice_promotions {
 model invoices {
   id                 String               @id @default(dbgenerated("(gen_random_uuid())::text"))
   code               String               @unique
-  createdAt          DateTime             @default(now())
   cashierId          String
-  cashSessionId      String?
   subtotal           Decimal              @db.Decimal(12, 2)
   discountAmount     Decimal              @default(0) @db.Decimal(12, 2)
-  voucherCode        String?
   finalTotal         Decimal              @db.Decimal(12, 2)
-  paymentMethod      PaymentMethod
-  receivedAmount     Decimal              @db.Decimal(12, 2)
-  changeAmount       Decimal              @default(0) @db.Decimal(12, 2)
-  paidAt             DateTime?
-  status             InvoiceStatus        @default(completed)
+  status             InvoiceStatus        @default(draft)
   notes              String?
-  invoice_approvals  invoice_approvals[]
+  createdAt          DateTime             @default(now())
+  paidAt             DateTime?
   invoice_items      invoice_items[]
   invoice_payments   invoice_payments[]
   invoice_promotions invoice_promotions[]
-  cash_sessions      cash_sessions?       @relation(fields: [cashSessionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   staff              staff                @relation(fields: [cashierId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-  @@index([cashSessionId])
   @@index([cashierId])
+  @@index([paidAt])
+  @@index([status])
 }
 
-enum Category {
-  SUA_TUOI_TIET_TRUNG
-  SUA_TUOI_THANH_TRUNG
-  SUA_CHUA
-  BO_PHOMAI
-  KEM
-  NUOC
-  TRA
+model app_settings {
+  key         String   @id
+  value       String
+  description String?
+  updatedAt   DateTime @default(now())
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model goods_receipt_items {
+  id             String         @id @default(dbgenerated("(gen_random_uuid())::text"))
+  receiptId      String
+  batchId        String
+  quantity       Int
+  importPrice    Decimal        @db.Decimal(12, 2)
+  batches        batches        @relation(fields: [batchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  goods_receipts goods_receipts @relation(fields: [receiptId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([receiptId, batchId])
+  @@index([batchId])
+}
+
+model goods_receipts {
+  id                  String                @id @default(dbgenerated("(gen_random_uuid())::text"))
+  code                String                @unique
+  supplierId          String
+  purchaseOrderId     String?
+  receivedById        String
+  receivedAt          DateTime              @default(now())
+  notes               String?
+  goods_receipt_items goods_receipt_items[]
+  purchase_orders     purchase_orders?      @relation(fields: [purchaseOrderId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  staff               staff                 @relation(fields: [receivedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  suppliers           suppliers             @relation(fields: [supplierId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([purchaseOrderId])
+  @@index([receivedById])
+  @@index([supplierId])
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model price_history {
+  id          String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  productId   String
+  oldPrice    Decimal? @db.Decimal(12, 2)
+  newPrice    Decimal  @db.Decimal(12, 2)
+  changedById String
+  changedAt   DateTime @default(now())
+  staff       staff    @relation(fields: [changedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  products    products @relation(fields: [productId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([changedById])
+  @@index([productId, changedAt], map: "price_history_product_idx")
+}
+
+model product_categories {
+  id         String         @id @default(dbgenerated("(gen_random_uuid())::text"))
+  code       String         @unique
+  name       String         @unique
+  status     CategoryStatus @default(active)
+  createdAt  DateTime       @default(now())
+  products   products[]
+  promotions promotions[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model stock_movements {
+  id          String            @id @default(dbgenerated("(gen_random_uuid())::text"))
+  batchId     String
+  type        StockMovementType
+  quantity    Int
+  reason      String?
+  refType     String?
+  refId       String?
+  createdById String
+  createdAt   DateTime          @default(now())
+  batches     batches           @relation(fields: [batchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  staff       staff             @relation(fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([batchId, createdAt], map: "stock_movements_batch_idx")
+  @@index([createdById])
+  @@index([refType, refId], map: "stock_movements_ref_idx")
 }
 
 enum DiscountType {
@@ -399,18 +423,16 @@ enum DiscountType {
 }
 
 enum InvoiceStatus {
-  completed
+  draft
   pending_payment
-  returned
+  completed
   cancelled
-  pending_approval
 }
 
 enum PaymentMethod {
   cash
   transfer
   card
-  mixed
 }
 
 enum ProductStatus {
@@ -430,18 +452,6 @@ enum PurchaseOrderStatus {
   pending
   received
   cancelled
-}
-
-enum Shift {
-  SANG
-  CHIEU
-  HANH_CHINH
-}
-
-enum StaffRole {
-  manager
-  cashier
-  warehouse
 }
 
 enum StaffStatus {
@@ -469,19 +479,27 @@ enum PromotionScope {
   near_expiry
 }
 
-enum BatchStatus {
-  good
-  expiring_soon
-  expired
-}
-
-enum CashSessionStatus {
-  open
-  closed
-  reviewed
-}
-
 enum SupplierStatus {
   active
   inactive
+}
+
+enum CategoryStatus {
+  active
+  inactive
+}
+
+enum LoginEvent {
+  login
+  logout
+  lock
+  unlock
+}
+
+enum StockMovementType {
+  import
+  sale
+  export
+  adjust
+  audit
 }
