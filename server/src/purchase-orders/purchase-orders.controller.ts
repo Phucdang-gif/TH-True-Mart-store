@@ -3,11 +3,11 @@ import { PurchaseOrdersService } from './purchase-orders.service';
 import { CreatePurchaseOrderDto } from './dto/create-purchase-order.dto';
 import { UpdatePurchaseOrderDto } from './dto/update-purchase-order.dto';
 
-@Controller('purchase-orders')
+@Controller('api/purchase-orders')
 export class PurchaseOrdersController {
   // Hardcode tạm ID của một staff có sẵn trong database (lấy từ bảng staff)
   // Sau khi làm tính năng Đăng nhập, ID này sẽ được trích xuất từ JWT Token (@Req() req)
-  private readonly MOCK_STAFF_ID = '001'; 
+  private readonly MOCK_STAFF_ID = '2a5500e6-dd82-4289-bf16-acf91c5d98c6'; 
 
   constructor(private readonly purchaseOrdersService: PurchaseOrdersService) {}
 

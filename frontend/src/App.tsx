@@ -11,7 +11,6 @@ import {
   INITIAL_STAFF,
   INITIAL_PROMOTIONS,
   INITIAL_INVOICES,
-  INITIAL_PURCHASE_ORDERS,
 } from "./data/initialData";
 import {
   Batch,
@@ -19,18 +18,14 @@ import {
   Promotion,
   Invoice,
   InvoiceApproval,
-  PurchaseOrder,
   StockAudit,
 } from "./types";
-import { useSuppliers } from "./hooks/useSuppliers";
 import { useProducts } from "./hooks/useProducts";
 
 export default function App() {
   const [activeModule, setActiveModule] = useState<number>(1); // 1 to 6
 
   // ===== Dữ liệu đã nối API: state + gọi API nằm trong hook =====
-  const { suppliers, addSupplier, updateSupplier, removeSupplier } =
-    useSuppliers();
   const { products, addProduct, updateProductPrice } = useProducts();
 
   // ===== Dữ liệu tạm (dữ liệu giả, sẽ nối API ở các module sau) =====
@@ -38,9 +33,6 @@ export default function App() {
   const [staffList, setStaffList] = useState<Staff[]>(INITIAL_STAFF);
   const [promotions, setPromotions] = useState<Promotion[]>(INITIAL_PROMOTIONS);
   const [invoices, setInvoices] = useState<Invoice[]>(INITIAL_INVOICES);
-  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>(
-    INITIAL_PURCHASE_ORDERS,
-  );
   const [stockAudits, setStockAudits] = useState<StockAudit[]>([]);
 
   // Nhân viên đang thao tác. TODO: thay bằng tài khoản đăng nhập (auth_sessions) khi có màn hình đăng nhập.
@@ -202,10 +194,6 @@ export default function App() {
     );
   };
 
-  const handleCreatePurchaseOrder = (newPO: PurchaseOrder) => {
-    setPurchaseOrders((prev) => [newPO, ...prev]);
-  };
-
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800">
       {/* Top Main Navigation Bar with 6 modules */}
@@ -262,17 +250,7 @@ export default function App() {
             />
           )}
 
-          {activeModule === 5 && (
-            <QuanLyNhaCungCap
-              suppliers={suppliers}
-              products={products}
-              purchaseOrders={purchaseOrders}
-              onAddSupplier={addSupplier}
-              onUpdateSupplier={updateSupplier}
-              onDeleteSupplier={removeSupplier}
-              onCreatePurchaseOrder={handleCreatePurchaseOrder}
-            />
-          )}
+          {activeModule === 5 && <QuanLyNhaCungCap products={products} />}
 
           {activeModule === 6 && (
             <BaoCaoThongKe

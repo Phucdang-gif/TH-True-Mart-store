@@ -1,20 +1,45 @@
-import { fetchApi } from "../lib/api";
-import { Supplier } from "../types";
+// Import đúng tên hàm fetchApi theo dạng ngoặc nhọn (named import)
+import { fetchApi } from '../lib/api';
 
-export type SupplierInput = Omit<Supplier, "id">;
+export interface Supplier {
+  id: string;
+  code: string;
+  name: string;
+  contactPerson: string;
+  phone: string;
+  address: string;
+  categoryProvided: string;
+  status: 'active' | 'inactive';
+}
 
-export const suppliersApi = {
-  list: () => fetchApi<Supplier[]>("/api/suppliers"),
-  create: (data: SupplierInput) =>
-    fetchApi<Supplier>("/api/suppliers", {
-      method: "POST",
+export type CreateSupplierDto = Omit<Supplier, 'id' | 'status'> & { status?: 'active' | 'inactive' };
+
+export const supplierService = {
+  // Lấy danh sách nhà cung cấp (ĐẢM BẢO CÓ /api Ở ĐÂY)
+  getAll: async () => {
+    return await fetchApi<Supplier[]>('/api/suppliers'); 
+  },
+
+  // Thêm mới
+  create: async (data: CreateSupplierDto) => {
+    return await fetchApi<Supplier>('/api/suppliers', { 
+      method: 'POST',
       body: JSON.stringify(data),
-    }),
-  update: (id: string, data: Partial<SupplierInput>) =>
-    fetchApi<Supplier>(`/api/suppliers/${id}`, {
-      method: "PATCH",
+    });
+  },
+
+  // Cập nhật
+  update: async (id: string, data: Partial<CreateSupplierDto>) => {
+    return await fetchApi<Supplier>(`/api/suppliers/${id}`, { 
+      method: 'PATCH',
       body: JSON.stringify(data),
-    }),
-  remove: (id: string) =>
-    fetchApi<void>(`/api/suppliers/${id}`, { method: "DELETE" }),
+    });
+  },
+
+  // Xóa
+  remove: async (id: string) => {
+    return await fetchApi<void>(`/api/suppliers/${id}`, { 
+      method: 'DELETE',
+    });
+  }
 };

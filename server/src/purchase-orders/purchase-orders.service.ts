@@ -34,7 +34,8 @@ export class PurchaseOrdersService {
         }
       },
       include: {
-        purchase_order_items: true // Trả về kèm chi tiết
+        suppliers: true,
+        purchase_order_items: { include: { products: true } },
       }
     });
   }
@@ -44,7 +45,7 @@ export class PurchaseOrdersService {
     return this.prisma.purchase_orders.findMany({
       include: {
         suppliers: true,
-        staff: true, // Lấy thông tin người tạo
+        purchase_order_items: { include: { products: true } },
       },
       orderBy: { createdAt: 'desc' }
     });

@@ -10,49 +10,53 @@ import {
   Edit,
   Trash2,
 } from "lucide-react";
-import { Supplier, PurchaseOrder, Product } from "../../types";
-import { SupplierInput } from "../../services/suppliers";
+import { PurchaseOrder, Product } from "../../types";
 import { fetchApi } from "../../lib/api";
-
+import { useSuppliers } from "../../hooks/useSuppliers";
+import { Supplier } from "../../services/suppliers";
+import { usePurchaseOrders } from "../../hooks/usePurchaseOrders";
 interface QuanLyNhaCungCapProps {
-  suppliers: Supplier[];
   products: Product[];
-  purchaseOrders: PurchaseOrder[];
-  // Các hàm này gọi API rồi mới cập nhật state; nếu API lỗi sẽ ném lỗi (throw)
-  onAddSupplier: (data: SupplierInput) => Promise<void>;
-  onUpdateSupplier: (id: string, data: Partial<SupplierInput>) => Promise<void>;
-  onDeleteSupplier: (id: string) => Promise<void>;
-  onCreatePurchaseOrder: (po: PurchaseOrder) => void;
 }
 
-// Giá trị ban đầu của form thêm NCC (mã để trống, người dùng tự nhập)
+// Giá trị ban đầu của form thêm NCC
 const EMPTY_SUPPLIER = {
   code: "",
   name: "",
   contactPerson: "",
   phone: "",
   address: "",
-  categoryProvided: "Sữa tươi & Chế phẩm sữa TH",
+  categoryProvided: "", // Đã đổi thành chuỗi rỗng để người dùng tự nhập
 };
 
 const getErrorMessage = (err: unknown, fallback: string) =>
   err instanceof Error ? err.message : fallback;
 
 export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
-  suppliers,
   products,
-  purchaseOrders,
-  onAddSupplier,
-  onUpdateSupplier,
-  onDeleteSupplier,
-  onCreatePurchaseOrder,
 }) => {
+  // Gọi hook lấy dữ liệu thật từ backend
+  const {
+    suppliers,
+    isLoading,
+    error: hookError,
+    addSupplier,
+    updateSupplier,
+    deleteSupplier,
+  } = useSuppliers();
+
+  const {
+    purchaseOrders,
+    error: poError,
+    addPurchaseOrder,
+  } = usePurchaseOrders();
+
   const [activeTab, setActiveTab] = useState<"suppliers" | "orders">(
     "suppliers",
   );
   const [search, setSearch] = useState("");
 
-  // Thông báo lỗi dùng chung cho các modal (mỗi lúc chỉ mở một modal)
+  // Thông báo lỗi dùng chung cho các thao tác nội bộ
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -72,8 +76,6 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
   >([{ productId: "", quantity: 50 }]);
   const [poNotes, setPoNotes] = useState("");
 
-  // NCC và sản phẩm tải bất đồng bộ từ API nên lúc khởi tạo state có thể còn rỗng;
-  // dùng giá trị dự phòng là phần tử đầu tiên khi người dùng chưa chọn
   const currentSupplierId = selectedSupplierId || suppliers[0]?.id || "";
   const defaultProductId = products[0]?.id || "";
 
@@ -111,21 +113,20 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
       s.contactPerson.toLowerCase().includes(search.toLowerCase()),
   );
 
-  // ===== Handlers nhà cung cấp =====
+  // ===== Handlers nhà cung cấp (Sử dụng Hook) =====
   const handleCreateSupplier = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newSup.name) return;
 
     setError(null);
     setSaving(true);
-    try {
-      await onAddSupplier({ ...newSup, status: "active" });
+
+    const success = await addSupplier({ ...newSup, status: "active" });
+    setSaving(false);
+
+    if (success) {
       setShowAddSupplierModal(false);
-      setNewSup(EMPTY_SUPPLIER); // reset form cho lần thêm sau
-    } catch (err) {
-      setError(getErrorMessage(err, "Không lưu được nhà cung cấp"));
-    } finally {
-      setSaving(false);
+      setNewSup(EMPTY_SUPPLIER);
     }
   };
 
@@ -135,35 +136,29 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
 
     setError(null);
     setSaving(true);
-    try {
-      const { name, contactPerson, phone, address, categoryProvided } =
-        editingSupplier;
-      await onUpdateSupplier(editingSupplier.id, {
-        name,
-        contactPerson,
-        phone,
-        address,
-        categoryProvided,
-      });
+
+    const { name, contactPerson, phone, address, categoryProvided } =
+      editingSupplier;
+    const success = await updateSupplier(editingSupplier.id, {
+      name,
+      contactPerson,
+      phone,
+      address,
+      categoryProvided,
+    });
+    setSaving(false);
+
+    if (success) {
       setEditingSupplier(null);
-    } catch (err) {
-      setError(getErrorMessage(err, "Không cập nhật được nhà cung cấp"));
-    } finally {
-      setSaving(false);
     }
   };
 
   const handleDelete = async (id: string) => {
     if (!window.confirm("Bạn có chắc chắn muốn xóa nhà cung cấp này?")) return;
-    try {
-      await onDeleteSupplier(id);
-    } catch (err) {
-      alert(getErrorMessage(err, "Không xóa được nhà cung cấp"));
-    }
+    await deleteSupplier(id);
   };
 
   // ===== Handler đơn đặt hàng (PO) =====
-  // TODO: chuyển phần gọi API sang services/purchaseOrders.ts khi làm module PO
   const handleCreateOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     const sup = suppliers.find((s) => s.id === currentSupplierId);
@@ -185,30 +180,22 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
       };
     });
 
-    const totalAmount = items.reduce((acc, i) => acc + i.subtotal, 0);
-
     const payload = {
-      // Backend sẽ tự sinh orderCode và ID
       supplierId: sup.id,
-      supplierName: sup.name,
       expectedDate,
-      items,
-      totalAmount,
-      status: "pending",
       notes: poNotes,
+      items: items.map(({ productId, quantity, unitPrice }) => ({
+        productId,
+        quantity,
+        unitPrice,
+      })),
     };
 
     setError(null);
     setSaving(true);
     try {
-      const savedPO = await fetchApi<PurchaseOrder>("/api/purchase-orders", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-      onCreatePurchaseOrder(savedPO);
-      setShowCreateOrderModal(false);
-    } catch (err) {
-      setError(getErrorMessage(err, "Không tạo được đơn đặt hàng"));
+      const ok = await addPurchaseOrder(payload);
+      if (ok) setShowCreateOrderModal(false);
     } finally {
       setSaving(false);
     }
@@ -262,6 +249,13 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
         )}
       </div>
 
+      {/* Hiển thị lỗi chung (nếu có) khi thao tác xóa hoặc fetch */}
+      {hookError && !showAddSupplierModal && !editingSupplier && (
+        <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm border border-red-100 font-medium">
+          {hookError}
+        </div>
+      )}
+
       {/* 6.1: Suppliers Cards */}
       {activeTab === "suppliers" && (
         <div className="space-y-4">
@@ -272,73 +266,87 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Tìm theo tên nhà cung cấp, mã..."
-              className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-hidden focus:bg-white"
+              className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-none focus:bg-white"
             />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredSuppliers.map((sup) => (
-              <div
-                key={sup.id}
-                className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex flex-col justify-between space-y-3"
-              >
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono font-bold text-xs bg-sky-50 text-[#004885] px-2 py-0.5 rounded">
-                      {sup.code}
-                    </span>
-                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
-                      Đối tác chính thức
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => openEditModal(sup)}
-                      className="p-1 text-slate-400 hover:text-blue-600 bg-slate-50 rounded"
-                    >
-                      <Edit className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(sup.id)}
-                      className="p-1 text-slate-400 hover:text-red-600 bg-slate-50 rounded"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                  <h4 className="font-bold text-sm text-slate-900 leading-snug">
-                    {sup.name}
-                  </h4>
+          {isLoading ? (
+            <div className="p-8 text-center text-slate-500 font-medium">
+              Đang tải dữ liệu nhà cung cấp...
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredSuppliers.map((sup) => (
+                <div
+                  key={sup.id}
+                  className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between space-y-3"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono font-bold text-xs bg-sky-50 text-[#004885] px-2 py-0.5 rounded">
+                        {sup.code}
+                      </span>
+                      <span
+                        className={
+                          sup.status === "active"
+                            ? "text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded"
+                            : "text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded"
+                        }
+                      >
+                        {sup.status === "active"
+                          ? "Hoạt động"
+                          : "Ngừng cung cấp"}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => openEditModal(sup)}
+                        className="p-1 text-slate-400 hover:text-blue-600 bg-slate-50 rounded"
+                      >
+                        <Edit className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(sup.id)}
+                        className="p-1 text-slate-400 hover:text-red-600 bg-slate-50 rounded"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <h4 className="font-bold text-sm text-slate-900 leading-snug">
+                      {sup.name}
+                    </h4>
 
-                  <div className="space-y-1 text-xs text-slate-600 pt-1">
-                    <p className="flex items-center gap-1.5">
-                      <span className="font-semibold text-slate-800">
-                        Liên hệ:
-                      </span>{" "}
-                      {sup.contactPerson}
-                    </p>
-                    <p className="flex items-center gap-1.5 text-slate-500">
-                      <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                      <span>{sup.phone}</span>
-                    </p>
-                    <p className="flex items-start gap-1.5 text-slate-500 text-[11px]">
-                      <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                      <span className="line-clamp-2">{sup.address}</span>
-                    </p>
+                    <div className="space-y-1 text-xs text-slate-600 pt-1">
+                      <p className="flex items-center gap-1.5">
+                        <span className="font-semibold text-slate-800">
+                          Liên hệ:
+                        </span>{" "}
+                        {sup.contactPerson}
+                      </p>
+                      <p className="flex items-center gap-1.5 text-slate-500">
+                        <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        <span>{sup.phone}</span>
+                      </p>
+                      <p className="flex items-start gap-1.5 text-slate-500 text-[11px]">
+                        <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
+                        <span className="line-clamp-2">{sup.address}</span>
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-slate-100 pt-2.5 text-[11px] text-[#004885] font-medium bg-sky-50/50 p-2 rounded">
+                    Cung cấp: {sup.categoryProvided}
                   </div>
                 </div>
-
-                <div className="border-t border-slate-100 pt-2.5 text-[11px] text-[#004885] font-medium bg-sky-50/50 p-2 rounded">
-                  Cung cấp: {sup.categoryProvided}
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {/* 6.2: Purchase Orders List */}
       {activeTab === "orders" && (
-        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-4">
+        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm space-y-4">
           <div className="flex items-center justify-between border-b border-slate-200 pb-3">
             <div>
               <h3 className="font-bold text-sm text-slate-900">
@@ -411,7 +419,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
 
       {/* Modal: Add Supplier */}
       {showAddSupplierModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-bold text-sm text-slate-900">
@@ -486,6 +494,21 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
               </div>
               <div>
                 <label className="font-bold text-slate-700 block mb-1">
+                  Mặt hàng cung cấp
+                </label>
+                <input
+                  type="text"
+                  placeholder="VD: Sữa tươi, Bao bì, Thiết bị..."
+                  value={newSup.categoryProvided}
+                  onChange={(e) =>
+                    setNewSup({ ...newSup, categoryProvided: e.target.value })
+                  }
+                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+                  required
+                />
+              </div>
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">
                   Địa chỉ
                 </label>
                 <input
@@ -498,7 +521,9 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                 />
               </div>
 
-              {error && <p className="text-red-600 font-medium">{error}</p>}
+              {(error || poError) && (
+                <p className="text-red-600 font-medium">{error || poError}</p>
+              )}
 
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
@@ -511,7 +536,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                 <button
                   type="submit"
                   disabled={saving}
-                  className="px-4 py-2 bg-[#004885] hover:bg-[#00386b] text-white rounded-lg font-bold shadow-xs disabled:opacity-60"
+                  className="px-4 py-2 bg-[#004885] hover:bg-[#00386b] text-white rounded-lg font-bold shadow-sm disabled:opacity-60"
                 >
                   {saving ? "Đang lưu..." : "Lưu nhà cung cấp"}
                 </button>
@@ -523,7 +548,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
 
       {/* Modal: Edit Supplier */}
       {editingSupplier && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-bold text-sm text-slate-900">
@@ -591,6 +616,23 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
               </div>
               <div>
                 <label className="font-bold text-slate-700 block mb-1">
+                  Mặt hàng cung cấp
+                </label>
+                <input
+                  type="text"
+                  value={editingSupplier.categoryProvided}
+                  onChange={(e) =>
+                    setEditingSupplier({
+                      ...editingSupplier,
+                      categoryProvided: e.target.value,
+                    })
+                  }
+                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+                  required
+                />
+              </div>
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">
                   Địa chỉ
                 </label>
                 <input
@@ -606,7 +648,9 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                 />
               </div>
 
-              {error && <p className="text-red-600 font-medium">{error}</p>}
+              {(error || hookError) && (
+                <p className="text-red-600 font-medium">{error || hookError}</p>
+              )}
 
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
@@ -619,7 +663,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                 <button
                   type="submit"
                   disabled={saving}
-                  className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-bold shadow-xs disabled:opacity-60"
+                  className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-bold shadow-sm disabled:opacity-60"
                 >
                   {saving ? "Đang lưu..." : "Cập nhật"}
                 </button>
@@ -631,7 +675,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
 
       {/* Modal: 6.2 Lập đơn đặt hàng */}
       {showCreateOrderModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-bold text-sm text-slate-900">
@@ -748,7 +792,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                 <button
                   type="submit"
                   disabled={saving}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold shadow-xs disabled:opacity-60"
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold shadow-sm disabled:opacity-60"
                 >
                   {saving ? "Đang gửi..." : "Gửi đơn đặt hàng"}
                 </button>
