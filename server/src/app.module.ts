@@ -7,9 +7,12 @@ import { SuppliersModule } from './suppliers/suppliers.module.js';
 import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
 import { BatchesModule } from './batches/batches.module';
 import { CategoriesModule } from './categories/categories.module';
+import { StockMovementsModule } from './stock-movements/stock-movements.module';
+import { GoodsReceiptsModule } from './goods-receipts/goods-receipts.module';
+import { StockAuditsModule } from './stock-audits/stock-audits.module';
 
 @Module({
-  imports: [PrismaModule, ProductsModule, SuppliersModule, PurchaseOrdersModule, BatchesModule, CategoriesModule],
+  imports: [PrismaModule, ProductsModule, SuppliersModule, PurchaseOrdersModule, BatchesModule, CategoriesModule, StockMovementsModule, GoodsReceiptsModule, StockAuditsModule],
   controllers: [AppController],
   providers: [AppService],
 })
