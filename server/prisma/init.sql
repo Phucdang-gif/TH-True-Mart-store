@@ -133,7 +133,7 @@ CREATE INDEX "login_logs_createdAt_idx" ON "login_logs"("createdAt");
 -- NHÓM 2. HÀNG HÓA
 -- =============================================================================
 -- Nhóm sản phẩm là dữ liệu (không phải enum) để Quản lý tự thêm/sửa/ngừng (BFD 2.1)
-CREATE TABLE "product_categories" (
+CREATE TABLE "Category" (
   "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
   "code" TEXT NOT NULL UNIQUE,
   "name" TEXT NOT NULL UNIQUE,
@@ -144,7 +144,7 @@ CREATE TABLE "products" (
   "id" TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
   "code" TEXT NOT NULL UNIQUE,
   "name" TEXT NOT NULL,
-  "categoryId" TEXT NOT NULL REFERENCES "product_categories"("id"),
+  "categoryId" TEXT NOT NULL REFERENCES "Category"("id"),
   "unit" TEXT NOT NULL,
   "sellingPrice" DECIMAL(12, 2) NOT NULL CHECK ("sellingPrice" > 0),
   "costPrice" DECIMAL(12, 2) NOT NULL CHECK ("costPrice" >= 0),
@@ -344,7 +344,7 @@ CREATE TABLE "promotions" (
   "maxDiscountAmount" DECIMAL(12, 2),
   -- trần giảm khi giảm theo % (NULL = không giới hạn)
   "minOrderValue" DECIMAL(12, 2) NOT NULL DEFAULT 0,
-  "categoryId" TEXT REFERENCES "product_categories"("id"),
+  "categoryId" TEXT REFERENCES "Category"("id"),
   -- bắt buộc khi scope = 'category'
   "nearExpiryDays" INTEGER CHECK ("nearExpiryDays" > 0),
   -- bắt buộc khi scope = 'near_expiry': lô còn <= N ngày hạn dùng

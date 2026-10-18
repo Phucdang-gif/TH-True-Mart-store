@@ -19,16 +19,16 @@ export class BatchesController {
 
   @Get(':id')
   findOne(@Param('id') id: string) {
-    return this.batchesService.findOne(+id);
+    return this.batchesService.findOne(id);
   }
 
   @Patch(':id')
   update(@Param('id') id: string, @Body() updateBatchDto: UpdateBatchDto) {
-    return this.batchesService.update(+id, updateBatchDto);
+    return this.batchesService.update(id, updateBatchDto);
   }
 
   @Delete(':id')
   remove(@Param('id') id: string) {
-    return this.batchesService.remove(+id);
+    return this.batchesService.remove(id);
   }
 }

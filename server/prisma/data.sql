@@ -122,7 +122,7 @@ FROM (
 -- =============================================================================
 -- NHÓM SẢN PHẨM & SẢN PHẨM
 -- =============================================================================
-INSERT INTO "product_categories" ("code", "name")
+INSERT INTO "Category" ("code", "name")
 VALUES ('SUA_TUOI_TIET_TRUNG', 'Sữa tươi tiệt trùng'),
   ('SUA_TUOI_THANH_TRUNG', 'Sữa tươi thanh trùng'),
   ('SUA_CHUA', 'Sữa chua'),
@@ -274,7 +274,7 @@ FROM (
     descr,
     status
   )
-  JOIN "product_categories" c ON c."code" = v.cat;
+  JOIN "Category" c ON c."code" = v.cat;
 -- Lịch sử giá: mỗi sản phẩm có dòng đặt giá đầu; 3 sản phẩm có thêm lần tăng giá
 INSERT INTO "price_history" (
     "productId",
@@ -757,7 +757,7 @@ FROM (
     status
   )
   JOIN "staff" s ON s."code" = 'NV001'
-  LEFT JOIN "product_categories" c ON c."code" = v.cat;
+  LEFT JOIN "Category" c ON c."code" = v.cat;
 INSERT INTO "promotion_products" ("promotionId", "productId")
 SELECT pr."id",
   p."id"

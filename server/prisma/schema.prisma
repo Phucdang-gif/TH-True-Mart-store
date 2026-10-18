@@ -24,7 +24,7 @@ model products {
   batches              batches[]
   invoice_items        invoice_items[]
   price_history        price_history[]
-  product_categories   product_categories     @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  product_categories   Category               @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   promotion_products   promotion_products[]
   purchase_order_items purchase_order_items[]
 
@@ -55,7 +55,7 @@ model promotions {
   updatedAt          DateTime             @default(now())
   invoice_promotions invoice_promotions[]
   promotion_products promotion_products[]
-  product_categories product_categories?  @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  product_categories Category?            @relation(fields: [categoryId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   staff              staff                @relation(fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([createdById])
@@ -388,16 +388,6 @@ model price_history {
   @@index([productId, changedAt], map: "price_history_product_idx")
 }
 
-model product_categories {
-  id         String         @id @default(dbgenerated("(gen_random_uuid())::text"))
-  code       String         @unique
-  name       String         @unique
-  status     CategoryStatus @default(active)
-  createdAt  DateTime       @default(now())
-  products   products[]
-  promotions promotions[]
-}
-
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model stock_movements {
   id          String            @id @default(dbgenerated("(gen_random_uuid())::text"))
@@ -415,6 +405,16 @@ model stock_movements {
   @@index([batchId, createdAt], map: "stock_movements_batch_idx")
   @@index([createdById])
   @@index([refType, refId], map: "stock_movements_ref_idx")
+}
+
+model Category {
+  id         String         @id @default(dbgenerated("(gen_random_uuid())::text"))
+  code       String         @unique
+  name       String         @unique
+  status     CategoryStatus @default(active)
+  createdAt  DateTime       @default(now())
+  products   products[]
+  promotions promotions[]
 }
 
 enum DiscountType {
