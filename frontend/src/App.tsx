@@ -12,14 +12,7 @@ import {
   INITIAL_PROMOTIONS,
   INITIAL_INVOICES,
 } from "./data/initialData";
-import {
-  Batch,
-  Staff,
-  Promotion,
-  Invoice,
-  InvoiceApproval,
-  StockAudit,
-} from "./types";
+import { Batch, Staff, Promotion, Invoice, InvoiceApproval } from "./types";
 import { useProducts } from "./hooks/useProducts";
 
 export default function App() {
@@ -33,7 +26,6 @@ export default function App() {
   const [staffList, setStaffList] = useState<Staff[]>(INITIAL_STAFF);
   const [promotions, setPromotions] = useState<Promotion[]>(INITIAL_PROMOTIONS);
   const [invoices, setInvoices] = useState<Invoice[]>(INITIAL_INVOICES);
-  const [stockAudits, setStockAudits] = useState<StockAudit[]>([]);
 
   // Nhân viên đang thao tác. TODO: thay bằng tài khoản đăng nhập (auth_sessions) khi có màn hình đăng nhập.
   const currentStaff: Staff =
@@ -150,38 +142,7 @@ export default function App() {
     );
   };
 
-  // Kiểm kê: lập phiếu -> chờ quản lý duyệt -> khi duyệt mới cập nhật tồn kho theo số thực tế
-  const handleSubmitAudit = (audit: StockAudit) => {
-    setStockAudits((prev) => [audit, ...prev]);
-  };
-
-  const handleReviewAudit = (
-    auditId: string,
-    approved: boolean,
-    approverId: string,
-  ) => {
-    const audit = stockAudits.find((x) => x.id === auditId);
-    if (!audit || audit.status !== "pending_approval") return;
-    setStockAudits((prev) =>
-      prev.map((x) =>
-        x.id === auditId
-          ? {
-              ...x,
-              status: approved ? "approved" : "rejected",
-              approvedById: approverId,
-            }
-          : x,
-      ),
-    );
-    if (approved) {
-      setBatches((prev) =>
-        prev.map((b) => {
-          const line = audit.items.find((i) => i.batchId === b.id);
-          return line ? { ...b, quantity: line.actualQuantity } : b;
-        }),
-      );
-    }
-  };
+  // Kiểm kê: đã chuyển sang gọi API trực tiếp trong QuanLyKho (/api/stock-audits)
 
   // 4. Staff handlers
   const handleAddStaff = (newStaff: Staff) => {
@@ -234,9 +195,6 @@ export default function App() {
               products={products}
               onAdjustStock={handleAdjustStock}
               currentStaff={currentStaff}
-              audits={stockAudits}
-              onSubmitAudit={handleSubmitAudit}
-              onReviewAudit={handleReviewAudit}
             />
           )}
 

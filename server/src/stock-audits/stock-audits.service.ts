@@ -10,7 +10,13 @@ export class StockAuditsService {
   // 1. THỦ KHO LẬP PHIẾU KIỂM KÊ
   async create(staffId: string, dto: CreateStockAuditDto) {
     // Lấy thông tin các lô hàng đang được kiểm kê để biết tồn kho hệ thống hiện tại
+    if (!dto.items || dto.items.length === 0) {
+      throw new BadRequestException('Phiếu kiểm kê phải có ít nhất 1 dòng.');
+    }
     const batchIds = dto.items.map(item => item.batchId);
+    if (new Set(batchIds).size !== batchIds.length) {
+      throw new BadRequestException('Một lô hàng xuất hiện nhiều lần trong phiếu.');
+    }
     const batches = await this.prisma.batches.findMany({
       where: { id: { in: batchIds } }
     });
@@ -58,6 +64,12 @@ export class StockAuditsService {
   async findAll() {
     return this.prisma.stock_audits.findMany({
       include: {
+        // Kèm chi tiết để giao diện hiển thị lịch sử (số mặt hàng, chênh lệch)
+        stock_audit_items: {
+          include: {
+            batches: { include: { products: { select: { name: true, code: true, unit: true } } } }
+          }
+        },
         staff_stock_audits_performedByIdTostaff: { select: { name: true, code: true } }, // Tên người lập
         staff_stock_audits_approvedByIdTostaff: { select: { name: true, code: true } }  // Tên người duyệt
       },
@@ -119,7 +131,7 @@ export class StockAuditsService {
           batchId: item.batchId,
           type: 'audit' as const,
           quantity: item.actualQuantity - item.systemQuantity, // Chênh lệch (âm hoặc dương)
-          reason: `Điều chỉnh theo phiếu kiểm kê ${audit.auditCode}. Lý do: ${item.reason}`,
+          reason: `Điều chỉnh theo phiếu kiểm kê ${audit.auditCode}. Lý do: ${item.reason?.trim() || 'Không rõ'}`,
           refType: 'audit',
           refId: audit.id,
           createdById: managerId

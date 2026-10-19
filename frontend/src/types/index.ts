@@ -210,6 +210,8 @@ export interface StockAuditItem {
   batchId?: string; // giao diện kiểm kê theo lô; server sẽ gộp theo productId khi lưu stock_audit_items
   productId: string;
   productName: string;
+  batchCode?: string; // mã lô (hiển thị ở chi tiết phiếu)
+  unit?: string; // đơn vị tính của sản phẩm
   systemQuantity: number;
   actualQuantity: number;
   difference: number;
@@ -222,7 +224,9 @@ export interface StockAudit {
   auditCode: string;
   auditDate: string;
   performedById: string;
+  performedByName?: string; // tên người lập phiếu
   approvedById?: string;
+  approvedByName?: string; // tên người duyệt
   status: StockAuditStatus;
   items: StockAuditItem[];
 }

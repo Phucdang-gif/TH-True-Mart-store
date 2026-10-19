@@ -13,27 +13,18 @@ import {
 } from "lucide-react";
 import { Product, Batch, StockAudit, StockAuditItem, Staff } from "../../types";
 import { fetchApi } from "../../lib/api";
+import { stockAuditService } from "../../services/stock-audits";
 
 interface QuanLyKhoProps {
   products: Product[];
   onAdjustStock: (batchId: string, newQuantity: number, reason: string) => void;
   currentStaff: Staff;
-  audits: StockAudit[];
-  onSubmitAudit: (audit: StockAudit) => void;
-  onReviewAudit: (
-    auditId: string,
-    approved: boolean,
-    approverId: string,
-  ) => void;
 }
 
 export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
   products,
   onAdjustStock,
   currentStaff,
-  audits,
-  onSubmitAudit,
-  onReviewAudit,
 }) => {
   const [activeTab, setActiveTab] = useState<
     "batches" | "alerts" | "audit" | "pending_pos"
@@ -44,12 +35,25 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
   const [batches, setBatches] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<any[]>([]);
+  const [audits, setAudits] = useState<StockAudit[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [auditSubmitting, setAuditSubmitting] = useState(false);
+  const [detailAudit, setDetailAudit] = useState<StockAudit | null>(null);
+
+  // Tải lại phiếu kiểm kê từ DB
+  const fetchAudits = async () => {
+    try {
+      setAudits(await stockAuditService.getAll());
+    } catch (error) {
+      console.error("Lỗi tải phiếu kiểm kê:", error);
+    }
+  };
 
   // === GỌI API ===
   const fetchData = async () => {
     setIsLoading(true);
     try {
+      fetchAudits();
       const [batchesRes, suppliersRes, poRes] = await Promise.all([
         fetchApi<any>("/api/batches").catch(() => []),
         fetchApi<any>("/api/suppliers").catch(() => []),
@@ -86,6 +90,9 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
   const [auditReasons, setAuditReasons] = useState<{ [key: string]: string }>(
     {},
   ); // MỚI: Lưu lý do người dùng chọn
+  const [auditCustomReasons, setAuditCustomReasons] = useState<{
+    [key: string]: string;
+  }>({}); // Lý do tự nhập khi chọn "Khác..."
   const [auditSaved, setAuditSaved] = useState(false);
 
   // Modal State cho việc Nhập kho từ PO
@@ -116,6 +123,21 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
       (product && product.name.toLowerCase().includes(search.toLowerCase()))
     );
   });
+
+  const auditStatusLabel: Record<string, string> = {
+    draft: "Nháp",
+    pending_approval: "Chờ duyệt",
+    approved: "Đã duyệt",
+    rejected: "Từ chối",
+  };
+  const auditStatusClass = (st: string) =>
+    st === "pending_approval"
+      ? "text-amber-600"
+      : st === "approved"
+        ? "text-emerald-700"
+        : st === "rejected"
+          ? "text-rose-600"
+          : "text-slate-700";
 
   const formatDate = (isoString: string) =>
     isoString ? new Date(isoString).toLocaleDateString("vi-VN") : "";
@@ -196,7 +218,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
   };
 
   // === XỬ LÝ GỬI PHIẾU KIỂM KÊ ===
-  const handleSubmitAuditForm = () => {
+  const handleSubmitAuditForm = async () => {
     // 1. Kiểm tra xem các mặt hàng có chênh lệch đã được chọn lý do chưa
     const items: StockAuditItem[] = batches.slice(0, 6).map((b) => {
       const actual =
@@ -210,7 +232,13 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
         actualQuantity: actual,
         difference: diff,
         reason:
-          diff !== 0 ? auditReasons[b.id] || "Chưa rõ nguyên nhân" : "Khớp",
+          diff === 0
+            ? "Khớp"
+            : auditReasons[b.id] === "Khác..."
+              ? auditCustomReasons[b.id]?.trim()
+                ? `Khác: ${auditCustomReasons[b.id].trim()}`
+                : "Chưa rõ nguyên nhân"
+              : auditReasons[b.id] || "Chưa rõ nguyên nhân",
       };
     });
 
@@ -218,24 +246,48 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
       (i) => i.difference !== 0 && i.reason === "Chưa rõ nguyên nhân",
     );
     if (hasMissingReason) {
-      alert("Vui lòng chọn lý do cho các mặt hàng có số lượng chênh lệch!");
+      alert(
+        'Vui lòng chọn lý do (và nhập nội dung nếu chọn "Khác...") cho các mặt hàng có số lượng chênh lệch!',
+      );
       return;
     }
 
     const now = new Date();
-    onSubmitAudit({
-      id: `audit-${now.getTime()}`,
-      auditCode: `KK-${now.toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(10 + Math.random() * 90)}`,
-      auditDate: now.toLocaleString("vi-VN"),
-      performedById: currentStaff.id,
-      status: "pending_approval",
-      items,
-    });
+    const auditCode = `KK-${now.toISOString().slice(0, 10).replace(/-/g, "")}-${now.getTime().toString().slice(-6)}`;
 
-    setAuditItems({});
-    setAuditReasons({});
-    setAuditSaved(true);
-    setTimeout(() => setAuditSaved(false), 3000);
+    setAuditSubmitting(true);
+    try {
+      await stockAuditService.create({
+        auditCode,
+        items: items.map((i) => ({
+          batchId: i.batchId as string,
+          actualQuantity: i.actualQuantity,
+          reason: i.difference !== 0 ? i.reason : undefined,
+        })),
+      });
+      setAuditItems({});
+      setAuditReasons({});
+      setAuditCustomReasons({});
+      setAuditSaved(true);
+      setTimeout(() => setAuditSaved(false), 3000);
+      await fetchAudits();
+    } catch (error: any) {
+      alert("Lỗi khi gửi phiếu kiểm kê: " + error.message);
+    } finally {
+      setAuditSubmitting(false);
+    }
+  };
+
+  // === QUẢN LÝ DUYỆT / TỪ CHỐI PHIẾU (gọi API, không còn sửa state cục bộ) ===
+  const handleReviewAudit = async (auditId: string, approved: boolean) => {
+    try {
+      await stockAuditService.review(auditId, approved);
+      // Duyệt xong: tồn kho lô đã đổi trong DB -> tải lại lô + lịch sử phiếu
+      await Promise.all([fetchData(), fetchAudits()]);
+      setDetailAudit(null);
+    } catch (error: any) {
+      alert("Lỗi khi xử lý phiếu kiểm kê: " + error.message);
+    }
   };
 
   return (
@@ -626,48 +678,68 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                       <td className="py-2.5 px-3 text-slate-500">
                         {/* THAY ĐỔI: Chuyển từ Text cứng sang Dropdown để người dùng chọn */}
                         {diff !== 0 ? (
-                          <select
-                            value={auditReasons[b.id] || ""}
-                            onChange={(e) =>
-                              setAuditReasons({
-                                ...auditReasons,
-                                [b.id]: e.target.value,
-                              })
-                            }
-                            className="w-full px-2 py-1 bg-white border border-amber-300 rounded text-xs outline-none focus:border-amber-500"
-                          >
-                            <option value="">-- Chọn lý do bắt buộc --</option>
-                            {diff < 0 ? (
-                              <>
-                                <option value="Hư hỏng / Rách vỡ bao bì">
-                                  Hư hỏng / Rách vỡ bao bì
-                                </option>
-                                <option value="Hàng cận date / Hết hạn">
-                                  Hàng cận date / Hết hạn
-                                </option>
-                                <option value="Thất thoát / Không tìm thấy">
-                                  Thất thoát / Không tìm thấy
-                                </option>
-                                <option value="Sai số liệu sổ sách">
-                                  Sai số liệu sổ sách
-                                </option>
-                                <option value="Khác...">Khác...</option>
-                              </>
-                            ) : (
-                              <>
-                                <option value="Khách trả hàng chưa nhập">
-                                  Khách trả hàng chưa nhập
-                                </option>
-                                <option value="Thừa khi nhận hàng">
-                                  Thừa khi nhận hàng
-                                </option>
-                                <option value="Sai số liệu sổ sách">
-                                  Sai số liệu sổ sách
-                                </option>
-                                <option value="Khác...">Khác...</option>
-                              </>
+                          <div className="space-y-1.5">
+                            <select
+                              value={auditReasons[b.id] || ""}
+                              onChange={(e) =>
+                                setAuditReasons({
+                                  ...auditReasons,
+                                  [b.id]: e.target.value,
+                                })
+                              }
+                              className="w-full px-2 py-1 bg-white border border-amber-300 rounded text-xs outline-none focus:border-amber-500"
+                            >
+                              <option value="">
+                                -- Chọn lý do bắt buộc --
+                              </option>
+                              {diff < 0 ? (
+                                <>
+                                  <option value="Hư hỏng / Rách vỡ bao bì">
+                                    Hư hỏng / Rách vỡ bao bì
+                                  </option>
+                                  <option value="Hàng cận date / Hết hạn">
+                                    Hàng cận date / Hết hạn
+                                  </option>
+                                  <option value="Thất thoát / Không tìm thấy">
+                                    Thất thoát / Không tìm thấy
+                                  </option>
+                                  <option value="Sai số liệu sổ sách">
+                                    Sai số liệu sổ sách
+                                  </option>
+                                  <option value="Khác...">Khác...</option>
+                                </>
+                              ) : (
+                                <>
+                                  <option value="Khách trả hàng chưa nhập">
+                                    Khách trả hàng chưa nhập
+                                  </option>
+                                  <option value="Thừa khi nhận hàng">
+                                    Thừa khi nhận hàng
+                                  </option>
+                                  <option value="Sai số liệu sổ sách">
+                                    Sai số liệu sổ sách
+                                  </option>
+                                  <option value="Khác...">Khác...</option>
+                                </>
+                              )}
+                            </select>
+                            {auditReasons[b.id] === "Khác..." && (
+                              <input
+                                type="text"
+                                autoFocus
+                                maxLength={200}
+                                value={auditCustomReasons[b.id] || ""}
+                                onChange={(e) =>
+                                  setAuditCustomReasons({
+                                    ...auditCustomReasons,
+                                    [b.id]: e.target.value,
+                                  })
+                                }
+                                placeholder="Nhập lý do cụ thể..."
+                                className="w-full px-2 py-1 bg-white border border-amber-300 rounded text-xs outline-none focus:border-amber-500"
+                              />
                             )}
-                          </select>
+                          </div>
                         ) : (
                           <span className="text-slate-400 px-2">Khớp</span>
                         )}
@@ -683,9 +755,12 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
           <div className="flex justify-end pt-4 border-t border-slate-100">
             <button
               onClick={handleSubmitAuditForm}
-              className="px-5 py-2.5 bg-[#004885] hover:bg-[#00386b] text-white rounded-lg text-xs font-bold shadow-sm transition-colors"
+              disabled={auditSubmitting}
+              className="disabled:opacity-60 px-5 py-2.5 bg-[#004885] hover:bg-[#00386b] text-white rounded-lg text-xs font-bold shadow-sm transition-colors"
             >
-              Gửi phiếu kiểm kê chờ quản lý duyệt
+              {auditSubmitting
+                ? "Đang gửi..."
+                : "Gửi phiếu kiểm kê chờ quản lý duyệt"}
             </button>
           </div>
 
@@ -724,25 +799,27 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                     </div>
                     <div className="flex items-center gap-3">
                       <span
-                        className={`font-bold ${a.status === "pending_approval" ? "text-amber-600" : a.status === "approved" ? "text-emerald-700" : "text-slate-700"}`}
+                        className={`font-bold ${auditStatusClass(a.status)}`}
                       >
                         {statusLabel[a.status]}
                       </span>
+                      <button
+                        onClick={() => setDetailAudit(a)}
+                        className="px-3 py-1.5 rounded-md bg-white border border-slate-300 text-[#004885] hover:bg-slate-100 font-bold transition-colors"
+                      >
+                        Chi tiết
+                      </button>
                       {a.status === "pending_approval" &&
                         currentStaff.role === "manager" && (
                           <div className="flex gap-2">
                             <button
-                              onClick={() =>
-                                onReviewAudit(a.id, true, currentStaff.id)
-                              }
+                              onClick={() => handleReviewAudit(a.id, true)}
                               className="px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-bold transition-colors"
                             >
                               Duyệt
                             </button>
                             <button
-                              onClick={() =>
-                                onReviewAudit(a.id, false, currentStaff.id)
-                              }
+                              onClick={() => handleReviewAudit(a.id, false)}
                               className="px-3 py-1.5 rounded-md bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 font-bold transition-colors"
                             >
                               Từ chối
@@ -755,6 +832,155 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* MODAL: CHI TIẾT PHIẾU KIỂM KÊ */}
+      {detailAudit && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => setDetailAudit(null)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between p-5 border-b border-slate-100">
+              <div>
+                <h3 className="font-bold text-lg text-slate-900 flex items-center gap-2">
+                  <ClipboardCheck className="w-5 h-5 text-[#004885]" />
+                  Chi tiết phiếu kiểm kê{" "}
+                  <span className="font-mono text-[#004885]">
+                    {detailAudit.auditCode}
+                  </span>
+                </h3>
+                <div className="text-xs text-slate-500 mt-2 space-y-1">
+                  <p>
+                    Ngày lập: <strong>{detailAudit.auditDate}</strong> • Trạng
+                    thái:{" "}
+                    <strong className={auditStatusClass(detailAudit.status)}>
+                      {auditStatusLabel[detailAudit.status]}
+                    </strong>
+                  </p>
+                  <p>
+                    Người lập:{" "}
+                    <strong>{detailAudit.performedByName || "—"}</strong> •
+                    Người duyệt:{" "}
+                    <strong>
+                      {detailAudit.approvedByName || "Chưa duyệt"}
+                    </strong>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setDetailAudit(null)}
+                className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-auto">
+              {(() => {
+                const diffCount = detailAudit.items.filter(
+                  (i) => i.difference !== 0,
+                ).length;
+                const totalDiff = detailAudit.items.reduce(
+                  (acc, i) => acc + i.difference,
+                  0,
+                );
+                return (
+                  <p className="text-xs text-slate-600 mb-3">
+                    Tổng {detailAudit.items.length} dòng • {diffCount} dòng lệch
+                    • Chênh lệch tổng:{" "}
+                    <strong
+                      className={
+                        totalDiff === 0
+                          ? "text-slate-500"
+                          : totalDiff > 0
+                            ? "text-emerald-700"
+                            : "text-rose-600"
+                      }
+                    >
+                      {totalDiff > 0 ? `+${totalDiff}` : totalDiff}
+                    </strong>
+                  </p>
+                );
+              })()}
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
+                    <th className="py-2.5 px-3">Mã Lô</th>
+                    <th className="py-2.5 px-3">Sản phẩm</th>
+                    <th className="py-2.5 px-3 text-right">SL Hệ thống</th>
+                    <th className="py-2.5 px-3 text-right">SL Thực tế</th>
+                    <th className="py-2.5 px-3 text-right">Chênh lệch</th>
+                    <th className="py-2.5 px-3">Lý do</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {detailAudit.items.map((i, idx) => (
+                    <tr
+                      key={`${i.batchId}-${idx}`}
+                      className={i.difference !== 0 ? "bg-amber-50/30" : ""}
+                    >
+                      <td className="py-2.5 px-3 font-mono font-bold text-[#004885]">
+                        {i.batchCode || "—"}
+                      </td>
+                      <td className="py-2.5 px-3 font-semibold text-slate-900">
+                        {i.productName}
+                        {i.unit && (
+                          <span className="block font-normal text-slate-500">
+                            {i.unit}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 text-right text-slate-600">
+                        {i.systemQuantity}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-bold">
+                        {i.actualQuantity}
+                      </td>
+                      <td
+                        className={`py-2.5 px-3 text-right font-bold ${i.difference === 0 ? "text-slate-400" : i.difference > 0 ? "text-emerald-700" : "text-rose-600"}`}
+                      >
+                        {i.difference > 0 ? `+${i.difference}` : i.difference}
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-600">
+                        {i.difference === 0 ? "Khớp" : i.reason || "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 p-4 border-t border-slate-100">
+              {detailAudit.status === "pending_approval" &&
+                currentStaff.role === "manager" && (
+                  <>
+                    <button
+                      onClick={() => handleReviewAudit(detailAudit.id, true)}
+                      className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold"
+                    >
+                      Duyệt
+                    </button>
+                    <button
+                      onClick={() => handleReviewAudit(detailAudit.id, false)}
+                      className="px-4 py-2 rounded-lg bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 text-xs font-bold"
+                    >
+                      Từ chối
+                    </button>
+                  </>
+                )}
+              <button
+                onClick={() => setDetailAudit(null)}
+                className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold"
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
