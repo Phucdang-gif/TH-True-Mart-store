@@ -81,8 +81,11 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
   // Lọc PO đang chờ nhập kho
   const pendingPOs = purchaseOrders.filter((po) => po.status === "pending");
 
-  // Stock Audit State (3.3)
+  // === Stock Audit State (Kiểm kê) ===
   const [auditItems, setAuditItems] = useState<{ [key: string]: number }>({});
+  const [auditReasons, setAuditReasons] = useState<{ [key: string]: string }>(
+    {},
+  ); // MỚI: Lưu lý do người dùng chọn
   const [auditSaved, setAuditSaved] = useState(false);
 
   // Modal State cho việc Nhập kho từ PO
@@ -122,7 +125,6 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
     setSelectedPO(po);
     setReceiptNotes("");
 
-    // Tự động map sản phẩm từ PO sang form nhập kho
     const initialItems = (po.purchase_order_items || po.items || []).map(
       (item: any) => {
         const prodName = item.products?.name || item.productName || "Sản phẩm";
@@ -133,7 +135,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
           unitPrice: item.unitPrice,
           batchCode: `LOTH-${new Date().toISOString().slice(0, 7).replace("-", "")}-${Math.floor(100 + Math.random() * 900)}`,
           manufacturingDate: new Date().toISOString().split("T")[0],
-          expiryDate: "", // Bắt buộc thủ kho phải soi hộp sữa để điền
+          expiryDate: "",
         };
       },
     );
@@ -152,12 +154,11 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
     setReceiptItems(updated);
   };
 
-  // === SUBMIT NHẬP KHO LÊN BACKEND ===
+  // === SUBMIT NHẬP KHO ===
   const handleSubmitReceipt = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPO) return;
 
-    // Ràng buộc phải nhập HSD
     if (receiptItems.some((i) => !i.expiryDate)) {
       alert("Vui lòng nhập Hạn sử dụng (HSD) cho tất cả các sản phẩm!");
       return;
@@ -182,10 +183,10 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
         }),
       });
 
-      await fetchData(); // Tải lại toàn bộ kho & danh sách PO
+      await fetchData();
       setShowReceiveModal(false);
       setSelectedPO(null);
-      setActiveTab("batches"); // Chuyển về tab Thẻ kho để xem lô vừa nhập
+      setActiveTab("batches");
       alert("Nhập kho thành công!");
     } catch (error: any) {
       alert("Lỗi khi nhập kho: " + error.message);
@@ -194,9 +195,52 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
     }
   };
 
+  // === XỬ LÝ GỬI PHIẾU KIỂM KÊ ===
+  const handleSubmitAuditForm = () => {
+    // 1. Kiểm tra xem các mặt hàng có chênh lệch đã được chọn lý do chưa
+    const items: StockAuditItem[] = batches.slice(0, 6).map((b) => {
+      const actual =
+        auditItems[b.id] !== undefined ? auditItems[b.id] : b.quantity;
+      const diff = actual - b.quantity;
+      return {
+        batchId: b.id,
+        productId: b.productId,
+        productName: products.find((p) => p.id === b.productId)?.name || "",
+        systemQuantity: b.quantity,
+        actualQuantity: actual,
+        difference: diff,
+        reason:
+          diff !== 0 ? auditReasons[b.id] || "Chưa rõ nguyên nhân" : "Khớp",
+      };
+    });
+
+    const hasMissingReason = items.some(
+      (i) => i.difference !== 0 && i.reason === "Chưa rõ nguyên nhân",
+    );
+    if (hasMissingReason) {
+      alert("Vui lòng chọn lý do cho các mặt hàng có số lượng chênh lệch!");
+      return;
+    }
+
+    const now = new Date();
+    onSubmitAudit({
+      id: `audit-${now.getTime()}`,
+      auditCode: `KK-${now.toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(10 + Math.random() * 90)}`,
+      auditDate: now.toLocaleString("vi-VN"),
+      performedById: currentStaff.id,
+      status: "pending_approval",
+      items,
+    });
+
+    setAuditItems({});
+    setAuditReasons({});
+    setAuditSaved(true);
+    setTimeout(() => setAuditSaved(false), 3000);
+  };
+
   return (
     <div className="space-y-4">
-      {/* 3.4 Cảnh báo nguy cấp (Giữ nguyên) */}
+      {/* Cảnh báo nguy cấp */}
       {criticalExpiringBatches.length > 0 && (
         <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-start justify-between gap-3 text-rose-900 shadow-xs">
           <div className="flex items-start gap-3">
@@ -226,7 +270,6 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
       {/* Tabs Menu */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
         <div className="flex items-center gap-2">
-          {/* TAB MỚI THÊM VÀO: Đơn chờ nhập */}
           <button
             onClick={() => setActiveTab("pending_pos")}
             className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition-all ${
@@ -277,7 +320,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
         </div>
       </div>
 
-      {/* NỘI DUNG TAB: ĐƠN CHỜ NHẬP KHO TỪ NHÀ CUNG CẤP */}
+      {/* NỘI DUNG TAB: ĐƠN CHỜ NHẬP KHO */}
       {activeTab === "pending_pos" && (
         <div className="space-y-4">
           {isLoading ? (
@@ -339,8 +382,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                     onClick={() => handleOpenReceivePO(po)}
                     className="w-full py-2 bg-[#004885] hover:bg-[#00386b] text-white text-xs font-bold rounded-lg transition-colors flex items-center justify-center gap-1.5"
                   >
-                    <Package className="w-4 h-4" />
-                    Bắt đầu Kiểm đếm & Nhập kho
+                    <Package className="w-4 h-4" /> Bắt đầu Kiểm đếm & Nhập kho
                   </button>
                 </div>
               ))}
@@ -349,7 +391,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
         </div>
       )}
 
-      {/* CÁC TAB CŨ (GIỮ NGUYÊN HOÀN TOÀN) */}
+      {/* TAB: THẺ KHO */}
       {activeTab === "batches" && (
         <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-4 shadow-xs">
           <div className="relative w-full sm:w-80">
@@ -358,7 +400,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Tìm theo số lô (LOTH-...), tên sữa..."
+              placeholder="Tìm theo số lô, tên sữa..."
               className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-hidden focus:bg-white"
             />
           </div>
@@ -436,6 +478,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
         </div>
       )}
 
+      {/* TAB: CẢNH BÁO */}
       {activeTab === "alerts" && (
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4 shadow-xs">
           <div className="flex items-center justify-between border-b border-slate-200 pb-3">
@@ -494,6 +537,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
         </div>
       )}
 
+      {/* TAB: KIỂM KÊ TỒN KHO - ĐÃ ĐƯỢC CHỈNH SỬA NGHIỆP VỤ */}
       {activeTab === "audit" && (
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4 shadow-xs">
           <div className="flex items-center justify-between border-b border-slate-200 pb-3">
@@ -501,8 +545,19 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
               <h3 className="font-bold text-sm text-slate-900">
                 Phiếu kiểm kê tồn kho cửa hàng
               </h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Đối chiếu số lượng phần mềm hệ thống với số lượng thực tế kiểm
+                đếm tại kệ
+              </p>
             </div>
+            {auditSaved && (
+              <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-lg border border-emerald-200 flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Đã gửi phiếu kiểm kê,
+                chờ quản lý duyệt!
+              </span>
+            )}
           </div>
+
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
@@ -514,7 +569,9 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                     SL Thực tế đếm được
                   </th>
                   <th className="py-2.5 px-3 text-right">Chênh lệch</th>
-                  <th className="py-2.5 px-3">Lý do điều chỉnh (nếu có)</th>
+                  <th className="py-2.5 px-3 min-w-[200px]">
+                    Lý do điều chỉnh (Kế toán)
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -525,8 +582,12 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                       ? auditItems[b.id]
                       : b.quantity;
                   const diff = actualCount - b.quantity;
+
                   return (
-                    <tr key={b.id}>
+                    <tr
+                      key={b.id}
+                      className={diff !== 0 ? "bg-amber-50/30" : ""}
+                    >
                       <td className="py-2.5 px-3 font-mono font-bold text-[#004885]">
                         {b.batchCode}
                       </td>
@@ -546,7 +607,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                               [b.id]: Number(e.target.value),
                             })
                           }
-                          className="w-20 px-2 py-1 bg-slate-50 border border-slate-300 rounded text-right font-bold text-xs"
+                          className={`w-20 px-2 py-1 bg-white border ${diff !== 0 ? "border-amber-400 focus:border-amber-500" : "border-slate-300 focus:border-[#004885]"} rounded text-right font-bold text-xs outline-none`}
                         />
                       </td>
                       <td className="py-2.5 px-3 text-right font-bold">
@@ -563,11 +624,53 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                         </span>
                       </td>
                       <td className="py-2.5 px-3 text-slate-500">
-                        {diff < 0
-                          ? "Bao bì móp méo / vỡ hỏng"
-                          : diff > 0
-                            ? "Thừa khi nhập hàng"
-                            : "Khớp"}
+                        {/* THAY ĐỔI: Chuyển từ Text cứng sang Dropdown để người dùng chọn */}
+                        {diff !== 0 ? (
+                          <select
+                            value={auditReasons[b.id] || ""}
+                            onChange={(e) =>
+                              setAuditReasons({
+                                ...auditReasons,
+                                [b.id]: e.target.value,
+                              })
+                            }
+                            className="w-full px-2 py-1 bg-white border border-amber-300 rounded text-xs outline-none focus:border-amber-500"
+                          >
+                            <option value="">-- Chọn lý do bắt buộc --</option>
+                            {diff < 0 ? (
+                              <>
+                                <option value="Hư hỏng / Rách vỡ bao bì">
+                                  Hư hỏng / Rách vỡ bao bì
+                                </option>
+                                <option value="Hàng cận date / Hết hạn">
+                                  Hàng cận date / Hết hạn
+                                </option>
+                                <option value="Thất thoát / Không tìm thấy">
+                                  Thất thoát / Không tìm thấy
+                                </option>
+                                <option value="Sai số liệu sổ sách">
+                                  Sai số liệu sổ sách
+                                </option>
+                                <option value="Khác...">Khác...</option>
+                              </>
+                            ) : (
+                              <>
+                                <option value="Khách trả hàng chưa nhập">
+                                  Khách trả hàng chưa nhập
+                                </option>
+                                <option value="Thừa khi nhận hàng">
+                                  Thừa khi nhận hàng
+                                </option>
+                                <option value="Sai số liệu sổ sách">
+                                  Sai số liệu sổ sách
+                                </option>
+                                <option value="Khác...">Khác...</option>
+                              </>
+                            )}
+                          </select>
+                        ) : (
+                          <span className="text-slate-400 px-2">Khớp</span>
+                        )}
                       </td>
                     </tr>
                   );
@@ -575,6 +678,83 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
               </tbody>
             </table>
           </div>
+
+          {/* Nút Gửi Kiểm Kê */}
+          <div className="flex justify-end pt-4 border-t border-slate-100">
+            <button
+              onClick={handleSubmitAuditForm}
+              className="px-5 py-2.5 bg-[#004885] hover:bg-[#00386b] text-white rounded-lg text-xs font-bold shadow-sm transition-colors"
+            >
+              Gửi phiếu kiểm kê chờ quản lý duyệt
+            </button>
+          </div>
+
+          {/* Lịch sử các phiếu kiểm kê */}
+          {audits.length > 0 && (
+            <div className="space-y-3 pt-4 border-t border-slate-100 mt-4">
+              <h4 className="font-bold text-sm text-slate-900">
+                Lịch sử phiếu kiểm kê ({audits.length})
+              </h4>
+              {audits.map((a) => {
+                const totalDiff = a.items.reduce(
+                  (acc, i) => acc + i.difference,
+                  0,
+                );
+                const statusLabel: Record<string, string> = {
+                  draft: "Nháp",
+                  pending_approval: "Chờ duyệt",
+                  approved: "Đã duyệt",
+                  rejected: "Từ chối",
+                };
+                return (
+                  <div
+                    key={a.id}
+                    className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs"
+                  >
+                    <div>
+                      <span className="font-mono font-bold text-[#004885]">
+                        {a.auditCode}
+                      </span>
+                      <span className="text-slate-500">
+                        {" "}
+                        • Ngày: {a.auditDate} • {a.items.length} mặt hàng •
+                        Chênh lệch tổng:{" "}
+                        {totalDiff > 0 ? `+${totalDiff}` : totalDiff}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span
+                        className={`font-bold ${a.status === "pending_approval" ? "text-amber-600" : a.status === "approved" ? "text-emerald-700" : "text-slate-700"}`}
+                      >
+                        {statusLabel[a.status]}
+                      </span>
+                      {a.status === "pending_approval" &&
+                        currentStaff.role === "manager" && (
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() =>
+                                onReviewAudit(a.id, true, currentStaff.id)
+                              }
+                              className="px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-bold transition-colors"
+                            >
+                              Duyệt
+                            </button>
+                            <button
+                              onClick={() =>
+                                onReviewAudit(a.id, false, currentStaff.id)
+                              }
+                              className="px-3 py-1.5 rounded-md bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 font-bold transition-colors"
+                            >
+                              Từ chối
+                            </button>
+                          </div>
+                        )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
