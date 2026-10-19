@@ -9,9 +9,9 @@ import {
   X,
   Edit,
   Trash2,
+  Eye,
 } from "lucide-react";
-import { PurchaseOrder, Product } from "../../types";
-import { fetchApi } from "../../lib/api";
+import { Product } from "../../types";
 import { useSuppliers } from "../../hooks/useSuppliers";
 import { Supplier } from "../../services/suppliers";
 import { usePurchaseOrders } from "../../hooks/usePurchaseOrders";
@@ -19,23 +19,43 @@ interface QuanLyNhaCungCapProps {
   products: Product[];
 }
 
-// Giá trị ban đầu của form thêm NCC
 const EMPTY_SUPPLIER = {
   code: "",
   name: "",
   contactPerson: "",
   phone: "",
   address: "",
-  categoryProvided: "", // Đã đổi thành chuỗi rỗng để người dùng tự nhập
+  categoryProvided: "",
 };
 
 const getErrorMessage = (err: unknown, fallback: string) =>
   err instanceof Error ? err.message : fallback;
 
+// Hàm từ điển xử lý trạng thái Đơn đặt hàng
+const getStatusDisplay = (status: string) => {
+  switch (status) {
+    case "received":
+      return {
+        text: "Đã nhập kho",
+        className: "bg-emerald-100 text-emerald-800",
+      };
+    case "cancelled":
+      return {
+        text: "Đã hủy",
+        className: "bg-rose-100 text-rose-800 line-through",
+      };
+    case "pending":
+    default:
+      return {
+        text: "Chờ tiếp nhận kho",
+        className: "bg-amber-100 text-amber-800",
+      };
+  }
+};
+
 export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
   products,
 }) => {
-  // Gọi hook lấy dữ liệu thật từ backend
   const {
     suppliers,
     isLoading,
@@ -55,8 +75,6 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
     "suppliers",
   );
   const [search, setSearch] = useState("");
-
-  // Thông báo lỗi dùng chung cho các thao tác nội bộ
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -65,21 +83,22 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
   const [showCreateOrderModal, setShowCreateOrderModal] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
 
-  // New Supplier State (6.1)
+  // MỚI: State lưu trữ đơn hàng đang được xem chi tiết
+  const [selectedPODetails, setSelectedPODetails] = useState<any | null>(null);
+
   const [newSup, setNewSup] = useState(EMPTY_SUPPLIER);
 
-  // New Purchase Order State (6.2)
+  // New Purchase Order State
+  const defaultProductId = products[0]?.id || "";
   const [selectedSupplierId, setSelectedSupplierId] = useState<string>("");
   const [expectedDate, setExpectedDate] = useState("2026-09-25");
   const [poItems, setPoItems] = useState<
     { productId: string; quantity: number }[]
-  >([{ productId: "", quantity: 50 }]);
+  >([{ productId: defaultProductId, quantity: 50 }]);
   const [poNotes, setPoNotes] = useState("");
 
   const currentSupplierId = selectedSupplierId || suppliers[0]?.id || "";
-  const defaultProductId = products[0]?.id || "";
 
-  // ===== Mở / đóng modal (luôn xóa lỗi cũ) =====
   const openAddModal = () => {
     setError(null);
     setShowAddSupplierModal(true);
@@ -98,6 +117,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
   };
   const openOrderModal = () => {
     setError(null);
+    setPoItems([{ productId: defaultProductId, quantity: 50 }]);
     setShowCreateOrderModal(true);
   };
   const closeOrderModal = () => {
@@ -105,7 +125,20 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
     setShowCreateOrderModal(false);
   };
 
-  // ===== Lọc danh sách =====
+  const handleAddPoItem = () => {
+    setPoItems([...poItems, { productId: defaultProductId, quantity: 1 }]);
+  };
+
+  const handleRemovePoItem = (index: number) => {
+    if (poItems.length > 1) {
+      const updated = [...poItems];
+      updated.splice(index, 1);
+      setPoItems(updated);
+    } else {
+      setError("Đơn đặt hàng phải có ít nhất 1 sản phẩm!");
+    }
+  };
+
   const filteredSuppliers = suppliers.filter(
     (s) =>
       s.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -113,17 +146,13 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
       s.contactPerson.toLowerCase().includes(search.toLowerCase()),
   );
 
-  // ===== Handlers nhà cung cấp (Sử dụng Hook) =====
   const handleCreateSupplier = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newSup.name) return;
-
     setError(null);
     setSaving(true);
-
     const success = await addSupplier({ ...newSup, status: "active" });
     setSaving(false);
-
     if (success) {
       setShowAddSupplierModal(false);
       setNewSup(EMPTY_SUPPLIER);
@@ -133,10 +162,8 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
   const handleUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingSupplier) return;
-
     setError(null);
     setSaving(true);
-
     const { name, contactPerson, phone, address, categoryProvided } =
       editingSupplier;
     const success = await updateSupplier(editingSupplier.id, {
@@ -147,10 +174,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
       categoryProvided,
     });
     setSaving(false);
-
-    if (success) {
-      setEditingSupplier(null);
-    }
+    if (success) setEditingSupplier(null);
   };
 
   const handleDelete = async (id: string) => {
@@ -158,7 +182,6 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
     await deleteSupplier(id);
   };
 
-  // ===== Handler đơn đặt hàng (PO) =====
   const handleCreateOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     const sup = suppliers.find((s) => s.id === currentSupplierId);
@@ -167,7 +190,13 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
       return;
     }
 
-    const items = poItems.map((item) => {
+    const validItems = poItems.filter((i) => i.productId && i.quantity > 0);
+    if (validItems.length === 0) {
+      setError("Vui lòng chọn ít nhất 1 sản phẩm hợp lệ!");
+      return;
+    }
+
+    const items = validItems.map((item) => {
       const productId = item.productId || defaultProductId;
       const prod = products.find((p) => p.id === productId);
       const unitPrice = prod?.costPrice || 30000;
@@ -195,7 +224,11 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
     setSaving(true);
     try {
       const ok = await addPurchaseOrder(payload);
-      if (ok) setShowCreateOrderModal(false);
+      if (ok) {
+        setShowCreateOrderModal(false);
+        setPoItems([{ productId: defaultProductId, quantity: 50 }]);
+        setPoNotes("");
+      }
     } finally {
       setSaving(false);
     }
@@ -235,21 +268,18 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
             onClick={openAddModal}
             className="bg-[#004885] hover:bg-[#00386b] text-white text-xs font-bold px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors shadow-xs"
           >
-            <Plus className="w-4 h-4" />
-            <span>Thêm nhà cung cấp mới</span>
+            <Plus className="w-4 h-4" /> <span>Thêm nhà cung cấp mới</span>
           </button>
         ) : (
           <button
             onClick={openOrderModal}
             className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors shadow-xs"
           >
-            <Plus className="w-4 h-4" />
-            <span>Lập đơn đặt hàng (PO) mới</span>
+            <Plus className="w-4 h-4" /> <span>Lập đơn đặt hàng (PO) mới</span>
           </button>
         )}
       </div>
 
-      {/* Hiển thị lỗi chung (nếu có) khi thao tác xóa hoặc fetch */}
       {hookError && !showAddSupplierModal && !editingSupplier && (
         <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm border border-red-100 font-medium">
           {hookError}
@@ -315,7 +345,6 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                     <h4 className="font-bold text-sm text-slate-900 leading-snug">
                       {sup.name}
                     </h4>
-
                     <div className="space-y-1 text-xs text-slate-600 pt-1">
                       <p className="flex items-center gap-1.5">
                         <span className="font-semibold text-slate-800">
@@ -333,7 +362,6 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                       </p>
                     </div>
                   </div>
-
                   <div className="border-t border-slate-100 pt-2.5 text-[11px] text-[#004885] font-medium bg-sky-50/50 p-2 rounded">
                     Cung cấp: {sup.categoryProvided}
                   </div>
@@ -363,56 +391,186 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
             {purchaseOrders.map((po) => (
               <div
                 key={po.id}
-                className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-3 text-xs"
+                className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-3 text-xs flex flex-col justify-between"
               >
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono font-bold text-sm text-[#004885]">
-                      {po.orderCode}
-                    </span>
-                    <span className="text-slate-400">•</span>
-                    <span className="font-semibold text-slate-900">
-                      {po.supplierName}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] text-slate-500">
-                      Dự kiến nhận:{" "}
-                      <strong className="text-slate-800">
-                        {po.expectedDate}
-                      </strong>
-                    </span>
-                    <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                      Chờ tiếp nhận kho
-                    </span>
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  {po.items.map((item, idx) => (
-                    <div
-                      key={idx}
-                      className="flex justify-between text-slate-700"
-                    >
-                      <span>
-                        • {item.productName} (Số lượng:{" "}
-                        <strong>{item.quantity}</strong>)
+                <div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2 mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-bold text-sm text-[#004885]">
+                        {po.orderCode}
                       </span>
-                      <span className="font-semibold">
-                        {item.subtotal.toLocaleString("vi-VN")} đ
+                      <span className="text-slate-400">•</span>
+                      <span className="font-semibold text-slate-900">
+                        {po.supplierName}
                       </span>
                     </div>
-                  ))}
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-slate-500">
+                        Dự kiến nhận:{" "}
+                        <strong className="text-slate-800">
+                          {po.expectedDate}
+                        </strong>
+                      </span>
+                      <span
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${getStatusDisplay(po.status).className}`}
+                      >
+                        {getStatusDisplay(po.status).text}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Chỉ hiển thị tối đa 2 sản phẩm ở thẻ ngoài */}
+                  <div className="space-y-1 text-slate-600">
+                    {po.items.slice(0, 2).map((item: any, idx: number) => (
+                      <div key={idx} className="truncate">
+                        • {item.productName} (SL: {item.quantity})
+                      </div>
+                    ))}
+                    {po.items.length > 2 && (
+                      <div className="text-[11px] italic text-slate-400 mt-1">
+                        ... và {po.items.length - 2} mặt hàng khác
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                <div className="flex justify-between items-center border-t border-slate-200 pt-2 font-bold text-xs">
-                  <span className="text-slate-600">Tổng giá trị đơn hàng:</span>
-                  <span className="text-sm text-[#004885]">
-                    {po.totalAmount.toLocaleString("vi-VN")} đ
-                  </span>
+                <div className="flex justify-between items-center border-t border-slate-200 pt-3 mt-3">
+                  <button
+                    onClick={() => setSelectedPODetails(po)}
+                    className="text-[#004885] hover:text-[#00386b] text-xs font-bold flex items-center gap-1 bg-sky-50 px-3 py-1.5 rounded-lg transition-colors"
+                  >
+                    <Eye className="w-3.5 h-3.5" /> Xem chi tiết đơn
+                  </button>
+                  <div className="text-right">
+                    <span className="text-slate-500 text-xs mr-2">
+                      Tổng giá trị:
+                    </span>
+                    <span className="text-sm font-bold text-[#004885]">
+                      {po.totalAmount.toLocaleString("vi-VN")} đ
+                    </span>
+                  </div>
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: XEM CHI TIẾT ĐƠN ĐẶT HÀNG */}
+      {selectedPODetails && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <div>
+                <h3 className="font-bold text-lg text-slate-900 flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-[#004885]" />
+                  Chi tiết Đơn đặt hàng {selectedPODetails.orderCode}
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Nhà cung cấp:{" "}
+                  <strong className="text-slate-800">
+                    {selectedPODetails.supplierName}
+                  </strong>
+                </p>
+              </div>
+              <button
+                onClick={() => setSelectedPODetails(null)}
+                className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto py-4 flex-1 text-xs">
+              <div className="flex items-center justify-between mb-4 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                <div>
+                  <span className="block text-slate-500 mb-0.5">
+                    Trạng thái:
+                  </span>
+                  <span
+                    className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${getStatusDisplay(selectedPODetails.status).className}`}
+                  >
+                    {getStatusDisplay(selectedPODetails.status).text}
+                  </span>
+                </div>
+                <div className="text-right">
+                  <span className="block text-slate-500 mb-0.5">
+                    Ngày giao hàng dự kiến:
+                  </span>
+                  <span className="font-bold text-slate-800 text-sm">
+                    {selectedPODetails.expectedDate}
+                  </span>
+                </div>
+              </div>
+
+              <h4 className="font-bold text-slate-800 mb-2">
+                Danh sách mặt hàng
+              </h4>
+              <div className="border border-slate-200 rounded-lg overflow-hidden">
+                <table className="w-full text-left">
+                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
+                    <tr>
+                      <th className="px-3 py-2.5">Sản phẩm</th>
+                      <th className="px-3 py-2.5 text-right">Đơn giá</th>
+                      <th className="px-3 py-2.5 text-right">Số lượng</th>
+                      <th className="px-3 py-2.5 text-right">Thành tiền</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {selectedPODetails.items.map((item: any, idx: number) => (
+                      <tr key={idx} className="hover:bg-slate-50">
+                        <td className="px-3 py-2.5 font-medium text-slate-800">
+                          {item.productName}
+                        </td>
+                        <td className="px-3 py-2.5 text-right text-slate-600">
+                          {item.unitPrice.toLocaleString("vi-VN")} đ
+                        </td>
+                        <td className="px-3 py-2.5 text-right font-bold text-slate-900">
+                          {item.quantity}
+                        </td>
+                        <td className="px-3 py-2.5 text-right font-semibold text-[#004885]">
+                          {item.subtotal.toLocaleString("vi-VN")} đ
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="bg-sky-50/50 border-t border-slate-200">
+                    <tr>
+                      <td
+                        colSpan={3}
+                        className="px-3 py-3 text-right font-bold text-slate-700"
+                      >
+                        TỔNG CỘNG:
+                      </td>
+                      <td className="px-3 py-3 text-right font-bold text-lg text-[#004885]">
+                        {selectedPODetails.totalAmount.toLocaleString("vi-VN")}{" "}
+                        đ
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+
+              {selectedPODetails.notes && (
+                <div className="mt-4 p-3 bg-amber-50/50 border border-amber-100 rounded-lg">
+                  <span className="font-bold text-amber-800 block mb-1 text-[11px]">
+                    Ghi chú đơn hàng:
+                  </span>
+                  <p className="text-slate-700 italic">
+                    {selectedPODetails.notes}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 flex justify-end">
+              <button
+                onClick={() => setSelectedPODetails(null)}
+                className="px-5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-bold text-xs transition-colors"
+              >
+                Đóng
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -432,7 +590,6 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                 <X className="w-5 h-5" />
               </button>
             </div>
-
             <form onSubmit={handleCreateSupplier} className="space-y-3 text-xs">
               <div>
                 <label className="font-bold text-slate-700 block mb-1">
@@ -520,11 +677,9 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                   className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
                 />
               </div>
-
               {(error || poError) && (
                 <p className="text-red-600 font-medium">{error || poError}</p>
               )}
-
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
@@ -561,7 +716,6 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                 <X className="w-5 h-5" />
               </button>
             </div>
-
             <form onSubmit={handleUpdate} className="space-y-3 text-xs">
               <div>
                 <label className="font-bold text-slate-700 block mb-1">
@@ -647,11 +801,9 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                   className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
                 />
               </div>
-
               {(error || hookError) && (
                 <p className="text-red-600 font-medium">{error || hookError}</p>
               )}
-
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
@@ -673,10 +825,10 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
         </div>
       )}
 
-      {/* Modal: 6.2 Lập đơn đặt hàng */}
+      {/* Modal: Lập đơn đặt hàng ĐÃ ĐƯỢC NÂNG CẤP */}
       {showCreateOrderModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-bold text-sm text-slate-900">
                 6.2 Lập đơn đặt hàng nhập kho (PO)
@@ -688,8 +840,11 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                 <X className="w-5 h-5" />
               </button>
             </div>
-
-            <form onSubmit={handleCreateOrder} className="space-y-3 text-xs">
+            <form
+              id="create-po-form"
+              onSubmit={handleCreateOrder}
+              className="space-y-3 text-xs overflow-y-auto pr-2"
+            >
               <div>
                 <label className="font-bold text-slate-700 block mb-1">
                   Nhà cung cấp tiếp nhận
@@ -706,7 +861,6 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                   ))}
                 </select>
               </div>
-
               <div>
                 <label className="font-bold text-slate-700 block mb-1">
                   Ngày dự kiến giao hàng
@@ -719,15 +873,22 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                   required
                 />
               </div>
-
-              {/* Items in PO */}
               <div>
-                <label className="font-bold text-slate-700 block mb-1">
-                  Sản phẩm & Số lượng đặt
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="font-bold text-slate-700">
+                    Sản phẩm & Số lượng đặt
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleAddPoItem}
+                    className="text-[10px] bg-sky-100 text-[#004885] px-2 py-1 rounded font-bold hover:bg-sky-200 flex items-center gap-1 transition-colors"
+                  >
+                    <Plus className="w-3 h-3" /> Thêm dòng
+                  </button>
+                </div>
                 <div className="space-y-2">
                   {poItems.map((item, idx) => (
-                    <div key={idx} className="flex gap-2">
+                    <div key={idx} className="flex gap-2 items-center">
                       <select
                         value={item.productId || defaultProductId}
                         onChange={(e) => {
@@ -761,13 +922,22 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                         className="w-24 p-2 bg-slate-50 border border-slate-200 rounded-lg text-right font-bold"
                         placeholder="Số lượng"
                       />
+                      {poItems.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemovePoItem(idx)}
+                          className="p-2 text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 rounded-lg transition-colors"
+                          title="Xóa dòng"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
               </div>
-
               <div>
-                <label className="font-bold text-slate-700 block mb-1">
+                <label className="font-bold text-slate-700 block mb-1 mt-2">
                   Ghi chú đơn hàng
                 </label>
                 <textarea
@@ -778,26 +948,25 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
                   className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
                 />
               </div>
-
               {error && <p className="text-red-600 font-medium">{error}</p>}
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={closeOrderModal}
-                  className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium"
-                >
-                  Hủy
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold shadow-sm disabled:opacity-60"
-                >
-                  {saving ? "Đang gửi..." : "Gửi đơn đặt hàng"}
-                </button>
-              </div>
             </form>
+            <div className="flex justify-end gap-2 pt-4 border-t border-slate-100 mt-2">
+              <button
+                type="button"
+                onClick={closeOrderModal}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium text-xs"
+              >
+                Hủy
+              </button>
+              <button
+                type="submit"
+                form="create-po-form"
+                disabled={saving}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold shadow-sm disabled:opacity-60 text-xs"
+              >
+                {saving ? "Đang gửi..." : "Gửi đơn đặt hàng"}
+              </button>
+            </div>
           </div>
         </div>
       )}

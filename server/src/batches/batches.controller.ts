@@ -3,7 +3,7 @@ import { BatchesService } from './batches.service';
 import { CreateBatchDto } from './dto/create-batch.dto';
 import { UpdateBatchDto } from './dto/update-batch.dto';
 
-@Controller('batches')
+@Controller('api/batches')
 export class BatchesController {
   constructor(private readonly batchesService: BatchesService) {}
 

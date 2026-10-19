@@ -232,8 +232,6 @@ export default function App() {
           {activeModule === 3 && (
             <QuanLyKho
               products={products}
-              batches={batches}
-              onAddBatch={handleAddBatch}
               onAdjustStock={handleAdjustStock}
               currentStaff={currentStaff}
               audits={stockAudits}
