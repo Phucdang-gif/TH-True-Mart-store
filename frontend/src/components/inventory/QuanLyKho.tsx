@@ -11,14 +11,18 @@ import {
   Package,
   Calendar,
 } from "lucide-react";
-import { Product, Batch, StockAudit, StockAuditItem, Staff } from "../../types";
-import { fetchApi } from "../../lib/api";
-import { stockAuditService } from "../../services/stock-audits";
 import {
-  stockMovementService,
-  StockMovementRow,
-} from "../../services/stock-movements";
-
+  Product,
+  Batch,
+  StockAudit,
+  StockAuditItem,
+  Staff,
+  PurchaseOrder,
+} from "../../types";
+import { useStockAudits } from "../../hooks/useStockAudits";
+import { useStockMovements } from "../../hooks/useStockMovements";
+import { useGoodsReceipts } from "../../hooks/useGoodsReceipts";
+import { usePurchaseOrders } from "../../hooks/usePurchaseOrders";
 interface QuanLyKhoProps {
   products: Product[];
   batches: Batch[]; // lô hàng dùng chung từ useBatches (App)
@@ -38,10 +42,18 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
   const [search, setSearch] = useState("");
 
   // === DATA TỪ API ===
-  const [suppliers, setSuppliers] = useState<any[]>([]);
-  const [purchaseOrders, setPurchaseOrders] = useState<any[]>([]);
-  const [audits, setAudits] = useState<StockAudit[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+
+  // Mỗi nguồn dữ liệu đi qua hook của nó (hook -> service -> fetchApi)
+  const { purchaseOrders, isLoading, fetchPurchaseOrders } =
+    usePurchaseOrders();
+  const { audits, submitAudit, reviewAudit } = useStockAudits();
+  const {
+    history: moveHistory,
+    loadHistory,
+    createMovement,
+  } = useStockMovements();
+  const { createReceipt } = useGoodsReceipts();
+
   const [auditSubmitting, setAuditSubmitting] = useState(false);
   const [detailAudit, setDetailAudit] = useState<StockAudit | null>(null);
 
@@ -53,7 +65,6 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
   const [moveQty, setMoveQty] = useState<number>(0);
   const [moveReason, setMoveReason] = useState("");
   const [moveSaving, setMoveSaving] = useState(false);
-  const [moveHistory, setMoveHistory] = useState<StockMovementRow[]>([]);
 
   const movementTypeLabel: Record<string, string> = {
     import: "Nhập kho",
@@ -68,12 +79,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
     setMoveMode("export");
     setMoveQty(0);
     setMoveReason("");
-    setMoveHistory([]);
-    try {
-      setMoveHistory(await stockMovementService.getByBatch(b.id));
-    } catch (error) {
-      console.error("Lỗi tải thẻ kho:", error);
-    }
+    await loadHistory(b.id);
   };
 
   const handleSubmitMovement = async () => {
@@ -93,7 +99,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
     }
     setMoveSaving(true);
     try {
-      await stockMovementService.create({
+      await createMovement({
         batchId: moveBatch.id,
         type: moveMode === "export" ? "export" : "adjust",
         quantity: signed,
@@ -108,42 +114,8 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
     }
   };
 
-  // Tải lại phiếu kiểm kê từ DB
-  const fetchAudits = async () => {
-    try {
-      setAudits(await stockAuditService.getAll());
-    } catch (error) {
-      console.error("Lỗi tải phiếu kiểm kê:", error);
-    }
-  };
-
-  // === GỌI API ===
-  const fetchData = async () => {
-    setIsLoading(true);
-    try {
-      fetchAudits();
-      const [, suppliersRes, poRes] = await Promise.all([
-        reloadBatches(),
-        fetchApi<any>("/api/suppliers").catch(() => []),
-        fetchApi<any>("/api/purchase-orders").catch(() => []),
-      ]);
-
-      const suppliersArray = Array.isArray(suppliersRes)
-        ? suppliersRes
-        : suppliersRes?.data || [];
-      const poArray = Array.isArray(poRes) ? poRes : poRes?.data || [];
-
-      setSuppliers(suppliersArray);
-      setPurchaseOrders(poArray);
-    } catch (error) {
-      console.error("Lỗi tải dữ liệu kho:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   useEffect(() => {
-    fetchData();
+    reloadBatches();
   }, []);
 
   // Lọc PO đang chờ nhập kho
@@ -211,20 +183,18 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
     setSelectedPO(po);
     setReceiptNotes("");
 
-    const initialItems = (po.purchase_order_items || po.items || []).map(
-      (item: any) => {
-        const prodName = item.products?.name || item.productName || "Sản phẩm";
-        return {
-          productId: item.productId,
-          productName: prodName,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          batchCode: `LOTH-${new Date().toISOString().slice(0, 7).replace("-", "")}-${Math.floor(100 + Math.random() * 900)}`,
-          manufacturingDate: new Date().toISOString().split("T")[0],
-          expiryDate: "",
-        };
-      },
-    );
+    const initialItems = (po.items || []).map((item: any) => {
+      const prodName = item.productName || "Sản phẩm";
+      return {
+        productId: item.productId,
+        productName: prodName,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        batchCode: `LOTH-${new Date().toISOString().slice(0, 7).replace("-", "")}-${Math.floor(100 + Math.random() * 900)}`,
+        manufacturingDate: new Date().toISOString().split("T")[0],
+        expiryDate: "",
+      };
+    });
 
     setReceiptItems(initialItems);
     setShowReceiveModal(true);
@@ -252,24 +222,21 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
 
     setSavingReceipt(true);
     try {
-      await fetchApi("/api/goods-receipts", {
-        method: "POST",
-        body: JSON.stringify({
-          supplierId: selectedPO.supplierId,
-          purchaseOrderId: selectedPO.id,
-          notes: receiptNotes,
-          items: receiptItems.map((i) => ({
-            productId: i.productId,
-            quantity: Number(i.quantity),
-            unitPrice: Number(i.unitPrice),
-            batchCode: i.batchCode,
-            manufacturingDate: new Date(i.manufacturingDate).toISOString(),
-            expiryDate: new Date(i.expiryDate).toISOString(),
-          })),
-        }),
+      await createReceipt({
+        supplierId: selectedPO.supplierId,
+        purchaseOrderId: selectedPO.id,
+        notes: receiptNotes,
+        items: receiptItems.map((i) => ({
+          productId: i.productId,
+          quantity: Number(i.quantity),
+          unitPrice: Number(i.unitPrice),
+          batchCode: i.batchCode,
+          manufacturingDate: new Date(i.manufacturingDate).toISOString(),
+          expiryDate: new Date(i.expiryDate).toISOString(),
+        })),
       });
 
-      await fetchData();
+      await Promise.all([reloadBatches(), fetchPurchaseOrders()]);
       setShowReceiveModal(false);
       setSelectedPO(null);
       setActiveTab("batches");
@@ -321,7 +288,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
 
     setAuditSubmitting(true);
     try {
-      await stockAuditService.create({
+      await submitAudit({
         auditCode,
         items: items.map((i) => ({
           batchId: i.batchId as string,
@@ -334,7 +301,6 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
       setAuditCustomReasons({});
       setAuditSaved(true);
       setTimeout(() => setAuditSaved(false), 3000);
-      await fetchAudits();
     } catch (error: any) {
       alert("Lỗi khi gửi phiếu kiểm kê: " + error.message);
     } finally {
@@ -345,9 +311,8 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
   // === QUẢN LÝ DUYỆT / TỪ CHỐI PHIẾU (gọi API, không còn sửa state cục bộ) ===
   const handleReviewAudit = async (auditId: string, approved: boolean) => {
     try {
-      await stockAuditService.review(auditId, approved);
-      // Duyệt xong: tồn kho lô đã đổi trong DB -> tải lại lô + lịch sử phiếu
-      await Promise.all([fetchData(), fetchAudits()]);
+      await reviewAudit(auditId, approved); // hook tự tải lại danh sách phiếu
+      await reloadBatches(); // duyệt xong tồn lô đã đổi trong DB
       setDetailAudit(null);
     } catch (error: any) {
       alert("Lỗi khi xử lý phiếu kiểm kê: " + error.message);
@@ -468,7 +433,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                       </span>
                     </div>
                     <h4 className="font-bold text-slate-800 text-sm">
-                      {po.suppliers?.name || po.supplierName}
+                      {po.supplierName}
                     </h4>
                     <p className="text-xs text-slate-500 mt-1 flex items-center gap-1">
                       <Calendar className="w-3.5 h-3.5" />
@@ -478,20 +443,18 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                       </strong>
                     </p>
                     <div className="mt-3 space-y-1">
-                      {(po.purchase_order_items || po.items || []).map(
-                        (item: any, idx: number) => (
-                          <p
-                            key={idx}
-                            className="text-xs text-slate-600 truncate"
-                          >
-                            • {item.products?.name || item.productName} (
-                            <strong className="text-slate-900">
-                              {item.quantity}
-                            </strong>
-                            )
-                          </p>
-                        ),
-                      )}
+                      {po.items.map((item, idx) => (
+                        <p
+                          key={idx}
+                          className="text-xs text-slate-600 truncate"
+                        >
+                          • {item.productName} (
+                          <strong className="text-slate-900">
+                            {item.quantity}
+                          </strong>
+                          )
+                        </p>
+                      ))}
                     </div>
                   </div>
                   <button
@@ -1267,7 +1230,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                   </strong>{" "}
                   • Đối tác:{" "}
                   <strong className="text-slate-800">
-                    {selectedPO.suppliers?.name || selectedPO.supplierName}
+                    {selectedPO.supplierName}
                   </strong>
                 </p>
               </div>

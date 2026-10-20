@@ -64,7 +64,6 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [barcodeInput, setBarcodeInput] = useState("");
 
   // Promotion state
   const [promoCode, setPromoCode] = useState("");
@@ -98,8 +97,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
       selectedCategory === "all" || p.category === selectedCategory;
     const matchesSearch =
       p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.barcode.includes(searchQuery);
+      p.code.toLowerCase().includes(searchQuery.toLowerCase());
     return matchesCat && matchesSearch;
   });
 

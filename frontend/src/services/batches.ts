@@ -1,26 +1,41 @@
 import { fetchApi } from '../lib/api';
-import { Batch } from '../types'; // Import interface chuẩn từ thư mục types
+import type { Batch, BatchStatus } from '../types';
+
+// JSON thô của GET /api/batches (Prisma kèm relation products)
+interface BatchApi {
+  id: string;
+  batchCode: string;
+  productId: string;
+  manufacturingDate: string;
+  expiryDate: string;
+  quantity: number;
+  products?: { costPrice?: string | number } | null;
+}
+
+const daysLeft = (iso: string) =>
+  Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000);
+
+// Bảng batches không có cột importPrice/status:
+// - importPrice lấy tạm từ giá vốn sản phẩm (dùng cho báo cáo giá trị tồn kho)
+// - status tính từ hạn sử dụng
+function toBatch(raw: BatchApi): Batch {
+  const d = daysLeft(raw.expiryDate);
+  const status: BatchStatus = d < 0 ? 'expired' : d <= 30 ? 'expiring_soon' : 'good';
+  return {
+    id: raw.id,
+    batchCode: raw.batchCode,
+    productId: raw.productId,
+    manufacturingDate: String(raw.manufacturingDate).slice(0, 10),
+    expiryDate: String(raw.expiryDate).slice(0, 10),
+    quantity: raw.quantity,
+    importPrice: Number(raw.products?.costPrice ?? 0),
+    status,
+  };
+}
 
 export const batchService = {
-  // Lấy danh sách tất cả các lô hàng
-  async getAll(): Promise<Batch[]> {
-    const res = await fetchApi<any>('/api/batches');
-    return Array.isArray(res) ? res : res?.data || [];
-  },
-
-  // Thêm lô hàng mới (hoặc thông qua goods-receipts)
-  async create(data: Omit<Batch, 'id' | 'createdAt'>): Promise<Batch> {
-    return await fetchApi<Batch>('/api/batches', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  },
-
-  // Cập nhật số lượng / thông tin lô hàng
-  async update(id: string, data: Partial<Batch>): Promise<Batch> {
-    return await fetchApi<Batch>(`/api/batches/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
+  getAll: async (): Promise<Batch[]> => {
+    const data = await fetchApi<BatchApi[]>('/api/batches');
+    return (Array.isArray(data) ? data : []).map(toBatch);
   },
 };
