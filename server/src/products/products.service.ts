@@ -43,14 +43,39 @@ export class ProductsService {
     return product;
   }
 
-  async update(id: string, updateProductDto: UpdateProductDto) {
-    // Tái sử dụng hàm findOne để kiểm tra. 
-    // Nếu ID không tồn tại, hàm findOne sẽ tự động ném lỗi 404 chặn lại ngay tại đây.
-    await this.findOne(id);
+  async update(id: string, updateProductDto: UpdateProductDto, staffId: string) {
+    // Nếu ID không tồn tại, findOne sẽ ném lỗi 404 chặn lại ngay tại đây.
+    const current = await this.findOne(id);
 
-    return this.prisma.products.update({
-      where: { id },
-      data: updateProductDto,
+    const newPrice = (updateProductDto as { sellingPrice?: number }).sellingPrice;
+    const priceChanged =
+      newPrice !== undefined && Number(current.sellingPrice) !== Number(newPrice);
+
+    if (!priceChanged) {
+      return this.prisma.products.update({ where: { id }, data: updateProductDto });
+    }
+
+    // Đổi giá bán: cập nhật sản phẩm + ghi lịch sử giá trong cùng 1 transaction
+    const [updated] = await this.prisma.$transaction([
+      this.prisma.products.update({ where: { id }, data: updateProductDto }),
+      this.prisma.price_history.create({
+        data: {
+          productId: id,
+          oldPrice: current.sellingPrice,
+          newPrice: newPrice as number,
+          changedById: staffId,
+        },
+      }),
+    ]);
+    return updated;
+  }
+
+  async findPriceHistory(id: string) {
+    await this.findOne(id);
+    return this.prisma.price_history.findMany({
+      where: { productId: id },
+      include: { staff: { select: { name: true, code: true } } },
+      orderBy: { changedAt: 'desc' },
     });
   }
 

@@ -14,16 +14,22 @@ import {
 import { Product, Batch, StockAudit, StockAuditItem, Staff } from "../../types";
 import { fetchApi } from "../../lib/api";
 import { stockAuditService } from "../../services/stock-audits";
+import {
+  stockMovementService,
+  StockMovementRow,
+} from "../../services/stock-movements";
 
 interface QuanLyKhoProps {
   products: Product[];
-  onAdjustStock: (batchId: string, newQuantity: number, reason: string) => void;
+  batches: Batch[]; // lô hàng dùng chung từ useBatches (App)
+  reloadBatches: () => Promise<void>; // tải lại lô sau khi nhập kho / kiểm kê / xuất / điều chỉnh
   currentStaff: Staff;
 }
 
 export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
   products,
-  onAdjustStock,
+  batches,
+  reloadBatches,
   currentStaff,
 }) => {
   const [activeTab, setActiveTab] = useState<
@@ -32,13 +38,75 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
   const [search, setSearch] = useState("");
 
   // === DATA TỪ API ===
-  const [batches, setBatches] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<any[]>([]);
   const [audits, setAudits] = useState<StockAudit[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [auditSubmitting, setAuditSubmitting] = useState(false);
   const [detailAudit, setDetailAudit] = useState<StockAudit | null>(null);
+
+  // === Xuất kho / Điều chỉnh (4.2) ===
+  const [moveBatch, setMoveBatch] = useState<Batch | null>(null);
+  const [moveMode, setMoveMode] = useState<
+    "export" | "adjust_down" | "adjust_up"
+  >("export");
+  const [moveQty, setMoveQty] = useState<number>(0);
+  const [moveReason, setMoveReason] = useState("");
+  const [moveSaving, setMoveSaving] = useState(false);
+  const [moveHistory, setMoveHistory] = useState<StockMovementRow[]>([]);
+
+  const movementTypeLabel: Record<string, string> = {
+    import: "Nhập kho",
+    sale: "Bán hàng",
+    export: "Xuất kho",
+    adjust: "Điều chỉnh",
+    audit: "Kiểm kê",
+  };
+
+  const openMoveModal = async (b: Batch) => {
+    setMoveBatch(b);
+    setMoveMode("export");
+    setMoveQty(0);
+    setMoveReason("");
+    setMoveHistory([]);
+    try {
+      setMoveHistory(await stockMovementService.getByBatch(b.id));
+    } catch (error) {
+      console.error("Lỗi tải thẻ kho:", error);
+    }
+  };
+
+  const handleSubmitMovement = async () => {
+    if (!moveBatch) return;
+    if (!Number.isInteger(moveQty) || moveQty <= 0) {
+      alert("Số lượng phải là số nguyên lớn hơn 0.");
+      return;
+    }
+    if (!moveReason.trim()) {
+      alert("Bắt buộc phải nhập lý do.");
+      return;
+    }
+    const signed = moveMode === "adjust_up" ? moveQty : -moveQty;
+    if (moveBatch.quantity + signed < 0) {
+      alert(`Lô chỉ còn ${moveBatch.quantity}, không thể giảm ${moveQty}.`);
+      return;
+    }
+    setMoveSaving(true);
+    try {
+      await stockMovementService.create({
+        batchId: moveBatch.id,
+        type: moveMode === "export" ? "export" : "adjust",
+        quantity: signed,
+        reason: moveReason.trim(),
+      });
+      await reloadBatches();
+      setMoveBatch(null);
+    } catch (error: any) {
+      alert("Lỗi khi ghi sổ kho: " + error.message);
+    } finally {
+      setMoveSaving(false);
+    }
+  };
 
   // Tải lại phiếu kiểm kê từ DB
   const fetchAudits = async () => {
@@ -54,21 +122,17 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
     setIsLoading(true);
     try {
       fetchAudits();
-      const [batchesRes, suppliersRes, poRes] = await Promise.all([
-        fetchApi<any>("/api/batches").catch(() => []),
+      const [, suppliersRes, poRes] = await Promise.all([
+        reloadBatches(),
         fetchApi<any>("/api/suppliers").catch(() => []),
         fetchApi<any>("/api/purchase-orders").catch(() => []),
       ]);
 
-      const batchesArray = Array.isArray(batchesRes)
-        ? batchesRes
-        : batchesRes?.data || [];
       const suppliersArray = Array.isArray(suppliersRes)
         ? suppliersRes
         : suppliersRes?.data || [];
       const poArray = Array.isArray(poRes) ? poRes : poRes?.data || [];
 
-      setBatches(batchesArray);
       setSuppliers(suppliersArray);
       setPurchaseOrders(poArray);
     } catch (error) {
@@ -474,6 +538,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                     <th className="py-2.5 px-3 text-center">
                       Trạng thái hạn dùng
                     </th>
+                    <th className="py-2.5 px-3 text-center">Thao tác</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -519,6 +584,14 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                                   ? "Cận date (≤30 ngày)"
                                   : "Đảm bảo"}
                           </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-center">
+                          <button
+                            onClick={() => openMoveModal(batch)}
+                            className="px-3 py-1.5 rounded-md bg-white border border-slate-300 text-[#004885] hover:bg-slate-100 font-bold transition-colors"
+                          >
+                            Xuất / Điều chỉnh
+                          </button>
                         </td>
                       </tr>
                     );
@@ -834,6 +907,199 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
           )}
         </div>
       )}
+
+      {/* MODAL: XUẤT KHO / ĐIỀU CHỈNH TỒN LÔ */}
+      {moveBatch &&
+        (() => {
+          const prod = products.find((p) => p.id === moveBatch.productId);
+          const signed = moveMode === "adjust_up" ? moveQty : -moveQty;
+          const after =
+            moveBatch.quantity + (Number.isFinite(signed) ? signed : 0);
+          const reasonOptions =
+            moveMode === "export"
+              ? [
+                  "Hư hỏng / Rách vỡ bao bì",
+                  "Hàng hết hạn",
+                  "Hàng cận date cần hủy",
+                  "Chuyển kho",
+                ]
+              : moveMode === "adjust_down"
+                ? [
+                    "Thất thoát / Không tìm thấy",
+                    "Sai số liệu sổ sách",
+                    "Hư hỏng chưa ghi nhận",
+                  ]
+                : [
+                    "Khách trả hàng chưa nhập",
+                    "Thừa khi nhận hàng",
+                    "Sai số liệu sổ sách",
+                  ];
+          return (
+            <div
+              className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4"
+              onClick={() => setMoveBatch(null)}
+            >
+              <div
+                className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-start justify-between p-5 border-b border-slate-100">
+                  <div>
+                    <h3 className="font-bold text-lg text-slate-900">
+                      Xuất kho / Điều chỉnh tồn lô{" "}
+                      <span className="font-mono text-[#004885]">
+                        {moveBatch.batchCode}
+                      </span>
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      {prod?.name || "Sản phẩm"} • Tồn hiện tại:{" "}
+                      <strong className="text-slate-800">
+                        {moveBatch.quantity} {prod?.unit}
+                      </strong>
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setMoveBatch(null)}
+                    className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="p-5 space-y-4 overflow-auto">
+                  <div className="grid grid-cols-3 gap-2 text-xs font-bold">
+                    {[
+                      { k: "export", t: "Xuất kho (hủy/hỏng)" },
+                      { k: "adjust_down", t: "Điều chỉnh giảm" },
+                      { k: "adjust_up", t: "Điều chỉnh tăng" },
+                    ].map((o) => (
+                      <button
+                        key={o.k}
+                        onClick={() => {
+                          setMoveMode(o.k as typeof moveMode);
+                          setMoveReason("");
+                        }}
+                        className={`px-3 py-2 rounded-lg border transition-colors ${
+                          moveMode === o.k
+                            ? "bg-[#004885] text-white border-[#004885]"
+                            : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50"
+                        }`}
+                      >
+                        {o.t}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <label className="space-y-1">
+                      <span className="font-bold text-slate-700">Số lượng</span>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={moveQty || ""}
+                        onChange={(e) => setMoveQty(Number(e.target.value))}
+                        className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg outline-none focus:border-[#004885]"
+                      />
+                    </label>
+                    <div className="space-y-1">
+                      <span className="font-bold text-slate-700">
+                        Tồn sau thao tác
+                      </span>
+                      <div
+                        className={`px-3 py-2 rounded-lg border font-bold ${
+                          after < 0
+                            ? "bg-rose-50 border-rose-200 text-rose-700"
+                            : "bg-slate-50 border-slate-200 text-slate-800"
+                        }`}
+                      >
+                        {moveBatch.quantity} → {after} {prod?.unit}
+                      </div>
+                    </div>
+                  </div>
+
+                  <label className="block space-y-1 text-xs">
+                    <span className="font-bold text-slate-700">
+                      Lý do (bắt buộc)
+                    </span>
+                    <input
+                      type="text"
+                      list="move-reasons"
+                      maxLength={200}
+                      value={moveReason}
+                      onChange={(e) => setMoveReason(e.target.value)}
+                      placeholder="Chọn gợi ý hoặc tự nhập lý do..."
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg outline-none focus:border-[#004885]"
+                    />
+                    <datalist id="move-reasons">
+                      {reasonOptions.map((r) => (
+                        <option key={r} value={r} />
+                      ))}
+                    </datalist>
+                  </label>
+
+                  <div>
+                    <h4 className="font-bold text-xs text-slate-800 mb-2">
+                      Thẻ kho gần đây của lô này
+                    </h4>
+                    {moveHistory.length === 0 ? (
+                      <p className="text-xs text-slate-400">
+                        Chưa có biến động.
+                      </p>
+                    ) : (
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
+                            <th className="py-2 px-2">Thời gian</th>
+                            <th className="py-2 px-2">Loại</th>
+                            <th className="py-2 px-2 text-right">SL</th>
+                            <th className="py-2 px-2">Lý do</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {moveHistory.slice(0, 8).map((m) => (
+                            <tr key={m.id}>
+                              <td className="py-1.5 px-2 text-slate-500">
+                                {new Date(m.createdAt).toLocaleString("vi-VN")}
+                              </td>
+                              <td className="py-1.5 px-2">
+                                {movementTypeLabel[m.type] || m.type}
+                              </td>
+                              <td
+                                className={`py-1.5 px-2 text-right font-bold ${m.quantity > 0 ? "text-emerald-700" : "text-rose-600"}`}
+                              >
+                                {m.quantity > 0 ? `+${m.quantity}` : m.quantity}
+                              </td>
+                              <td className="py-1.5 px-2 text-slate-600">
+                                {m.reason || "—"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 p-4 border-t border-slate-100">
+                  <button
+                    onClick={() => setMoveBatch(null)}
+                    className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold"
+                  >
+                    Hủy
+                  </button>
+                  <button
+                    onClick={handleSubmitMovement}
+                    disabled={moveSaving}
+                    className="px-4 py-2 rounded-lg bg-[#004885] hover:bg-[#00386b] text-white text-xs font-bold disabled:opacity-60"
+                  >
+                    {moveSaving ? "Đang ghi sổ kho..." : "Xác nhận"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
       {/* MODAL: CHI TIẾT PHIẾU KIỂM KÊ */}
       {detailAudit && (

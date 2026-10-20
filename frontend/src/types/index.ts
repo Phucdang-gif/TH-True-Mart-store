@@ -173,6 +173,7 @@ export interface Promotion {
   usageLimit?: number;
   usedCount: number;
   status: PromotionStatus;
+  statusChangedAt?: string; // thời điểm đổi trạng thái gần nhất
   createdById?: string; // staff.id người tạo
 }
 

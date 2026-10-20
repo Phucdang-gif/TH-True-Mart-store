@@ -12,6 +12,10 @@ import {
   Calendar,
 } from "lucide-react";
 import { Product, Promotion, Category, PromotionScope } from "../../types";
+import type {
+  CreatePromotionInput,
+  PromotionAction,
+} from "../../services/promotions";
 import { ProductInput } from "../../services/products";
 import {
   CATEGORY_LABELS,
@@ -30,7 +34,12 @@ interface QuanLyHangHoaProps {
     newCostPrice: number,
   ) => Promise<void>;
   onAddProduct: (data: ProductInput) => Promise<void>;
-  onAddPromotion: (promo: Promotion) => void;
+  // Gọi API; ném lỗi (throw) nếu server từ chối
+  onCreatePromotion: (input: CreatePromotionInput) => Promise<void>;
+  onChangePromotionStatus: (
+    id: string,
+    action: PromotionAction,
+  ) => Promise<void>;
 }
 
 // Giá trị ban đầu của form thêm sản phẩm (mã để trống, người dùng tự nhập)
@@ -51,7 +60,8 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
   promotions,
   onUpdateProductPrice,
   onAddProduct,
-  onAddPromotion,
+  onCreatePromotion,
+  onChangePromotionStatus,
 }) => {
   const [activeTab, setActiveTab] = useState<
     "products" | "categories" | "promotions"
@@ -81,20 +91,61 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
 
   // New Promotion Modal
   const [showAddPromoModal, setShowAddPromoModal] = useState(false);
-  const [newPromo, setNewPromo] = useState<Partial<Promotion>>({
-    code: "THPROMO2026",
+  const isoDay = (offsetDays: number) =>
+    new Date(Date.now() + offsetDays * 86_400_000).toLocaleDateString("en-CA", {
+      timeZone: "Asia/Ho_Chi_Minh",
+    });
+  const EMPTY_PROMO: Partial<Promotion> = {
+    code: "",
     name: "",
     scope: "order",
     discountType: "percentage",
     value: 10,
     maxDiscountAmount: undefined,
-    startDate: "2026-09-20",
-    endDate: "2026-10-20",
-    minOrderValue: 150000,
+    startDate: isoDay(0),
+    endDate: isoDay(30),
+    minOrderValue: 0,
     requiresCode: false,
     usageLimit: undefined,
-    status: "scheduled",
-  });
+  };
+  const [newPromo, setNewPromo] = useState<Partial<Promotion>>(EMPTY_PROMO);
+  const [promoProductIds, setPromoProductIds] = useState<string[]>([]);
+  const [promoActivateNow, setPromoActivateNow] = useState(true);
+  const [promoSaving, setPromoSaving] = useState(false);
+
+  const openAddPromo = () => {
+    setNewPromo({ ...EMPTY_PROMO, startDate: isoDay(0), endDate: isoDay(30) });
+    setPromoProductIds([]);
+    setPromoActivateNow(true);
+    setShowAddPromoModal(true);
+  };
+
+  const statusActionLabel: Record<PromotionAction, string> = {
+    activate: "kích hoạt",
+    pause: "tạm dừng",
+    end: "kết thúc",
+  };
+  const handlePromoAction = async (
+    promo: Promotion,
+    action: PromotionAction,
+  ) => {
+    if (
+      action === "end" &&
+      !window.confirm(
+        `Kết thúc chương trình ${promo.code}? Không thể kích hoạt lại sau khi kết thúc.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await onChangePromotionStatus(promo.id, action);
+    } catch (err) {
+      alert(
+        `Không thể ${statusActionLabel[action]}: ` +
+          (err instanceof Error ? err.message : "lỗi không xác định"),
+      );
+    }
+  };
 
   const categories: Category[] = CATEGORY_LIST; // mã enum của DB
 
@@ -161,13 +212,14 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
     }
   };
 
-  const handleCreatePromotion = (e: React.FormEvent) => {
+  const handleCreatePromotion = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newPromo.code || !newPromo.name) {
+    const code = newPromo.code?.trim().toUpperCase();
+    if (!code || !newPromo.name?.trim()) {
       alert("Vui lòng nhập mã và tên chương trình khuyến mãi!");
       return;
     }
-    if (promotions.some((p) => p.code === newPromo.code!.toUpperCase())) {
+    if (promotions.some((p) => p.code === code)) {
       alert("Mã khuyến mãi đã tồn tại!");
       return;
     }
@@ -176,10 +228,14 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
       alert("Giá trị giảm phải lớn hơn 0!");
       return;
     }
-    const startDate = newPromo.startDate || "2026-09-20";
-    const endDate = newPromo.endDate || "2026-10-20";
-    if (endDate <= startDate) {
-      alert("Ngày kết thúc phải sau ngày bắt đầu!");
+    if (newPromo.discountType === "percentage" && value > 100) {
+      alert("Giảm theo % không được vượt quá 100!");
+      return;
+    }
+    const startDate = newPromo.startDate || isoDay(0);
+    const endDate = newPromo.endDate || isoDay(30);
+    if (endDate < startDate) {
+      alert("Ngày kết thúc không được trước ngày bắt đầu!");
       return;
     }
     const scope = (newPromo.scope || "order") as PromotionScope;
@@ -191,34 +247,48 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
       alert("Vui lòng nhập số ngày còn hạn dùng để xả hàng!");
       return;
     }
-    const today = new Date().toISOString().slice(0, 10);
-    const promoToAdd: Promotion = {
-      id: `promo-${Date.now()}`,
-      code: newPromo.code.toUpperCase(),
-      name: newPromo.name,
-      description: newPromo.description,
-      scope,
-      discountType: newPromo.discountType as "percentage" | "fixed_amount",
-      value,
-      maxDiscountAmount:
-        newPromo.discountType === "percentage" && newPromo.maxDiscountAmount
-          ? Number(newPromo.maxDiscountAmount)
+    if (scope === "product" && promoProductIds.length === 0) {
+      alert("Vui lòng chọn ít nhất 1 sản phẩm áp dụng!");
+      return;
+    }
+
+    setPromoSaving(true);
+    try {
+      await onCreatePromotion({
+        code,
+        name: newPromo.name.trim(),
+        description: newPromo.description,
+        scope,
+        discountType: newPromo.discountType as "percentage" | "fixed_amount",
+        value,
+        maxDiscountAmount:
+          newPromo.discountType === "percentage" && newPromo.maxDiscountAmount
+            ? Number(newPromo.maxDiscountAmount)
+            : undefined,
+        minOrderValue: Number(newPromo.minOrderValue) || 0,
+        categoryCode:
+          scope === "category" ? newPromo.applicableCategory : undefined,
+        nearExpiryDays:
+          scope === "near_expiry" ? Number(newPromo.nearExpiryDays) : undefined,
+        productIds: scope === "product" ? promoProductIds : undefined,
+        requiresCode: !!newPromo.requiresCode,
+        usageLimit: newPromo.usageLimit
+          ? Number(newPromo.usageLimit)
           : undefined,
-      startDate,
-      endDate,
-      minOrderValue: Number(newPromo.minOrderValue) || 0,
-      applicableCategory:
-        scope === "category" ? newPromo.applicableCategory : undefined,
-      nearExpiryDays:
-        scope === "near_expiry" ? Number(newPromo.nearExpiryDays) : undefined,
-      requiresCode: !!newPromo.requiresCode,
-      usageLimit: newPromo.usageLimit ? Number(newPromo.usageLimit) : undefined,
-      usedCount: 0,
-      // Vòng đời: chưa tới ngày bắt đầu -> scheduled, đã tới ngày -> active
-      status: startDate > today ? "scheduled" : "active",
-    };
-    onAddPromotion(promoToAdd);
-    setShowAddPromoModal(false);
+        startDate,
+        endDate,
+        activateNow: promoActivateNow,
+      });
+      setShowAddPromoModal(false);
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : "Không lưu được chương trình khuyến mãi",
+      );
+    } finally {
+      setPromoSaving(false);
+    }
   };
 
   return (
@@ -278,7 +348,7 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
         {activeTab === "promotions" && (
           <button
             id="btn-open-add-promo"
-            onClick={() => setShowAddPromoModal(true)}
+            onClick={openAddPromo}
             className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors shadow-xs"
           >
             <Plus className="w-4 h-4" />
@@ -553,11 +623,57 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
                 )}
               </div>
 
-              <div className="text-[11px] text-slate-500 border-t border-slate-100 pt-2 flex items-center gap-1.5">
-                <Calendar className="w-3.5 h-3.5" />
-                <span>
-                  Thời hạn: {promo.startDate} đến {promo.endDate}
-                </span>
+              {promo.scope === "product" &&
+                (promo.productIds?.length ?? 0) > 0 && (
+                  <p className="text-[11px] text-slate-500">
+                    Sản phẩm áp dụng:{" "}
+                    {promo
+                      .productIds!.map(
+                        (id) =>
+                          products.find((p) => p.id === id)?.name || "SP đã ẩn",
+                      )
+                      .join(", ")}
+                  </p>
+                )}
+
+              <div className="text-[11px] text-slate-500 border-t border-slate-100 pt-2 space-y-2">
+                <div className="flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5" />
+                  <span>
+                    Thời hạn: {promo.startDate} đến {promo.endDate}
+                  </span>
+                </div>
+                {promo.statusChangedAt && (
+                  <p>Đổi trạng thái lần cuối: {promo.statusChangedAt}</p>
+                )}
+                {promo.status !== "expired" && (
+                  <div className="flex gap-2 pt-1">
+                    {(promo.status === "draft" ||
+                      promo.status === "paused") && (
+                      <button
+                        onClick={() => handlePromoAction(promo, "activate")}
+                        className="px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-bold"
+                      >
+                        Kích hoạt
+                      </button>
+                    )}
+                    {(promo.status === "active" ||
+                      promo.status === "scheduled") && (
+                      <button
+                        onClick={() => handlePromoAction(promo, "pause")}
+                        className="px-3 py-1.5 rounded-md bg-white border border-amber-300 text-amber-700 hover:bg-amber-50 font-bold"
+                      >
+                        Tạm dừng
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handlePromoAction(promo, "end")}
+                      className="px-3 py-1.5 rounded-md bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 font-bold"
+                    >
+                      Kết thúc
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -717,7 +833,7 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
       {/* Modal: Add Promotion */}
       {showAddPromoModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[92vh] overflow-auto p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="font-bold text-sm text-slate-900">
                 Tạo chương trình khuyến mãi mới
@@ -919,6 +1035,97 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
                 </div>
               </div>
 
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">
+                    Từ ngày
+                  </label>
+                  <input
+                    type="date"
+                    value={newPromo.startDate || ""}
+                    onChange={(e) =>
+                      setNewPromo({ ...newPromo, startDate: e.target.value })
+                    }
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">
+                    Đến hết ngày
+                  </label>
+                  <input
+                    type="date"
+                    value={newPromo.endDate || ""}
+                    onChange={(e) =>
+                      setNewPromo({ ...newPromo, endDate: e.target.value })
+                    }
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">
+                  Đơn tối thiểu (đ)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={newPromo.minOrderValue ?? 0}
+                  onChange={(e) =>
+                    setNewPromo({
+                      ...newPromo,
+                      minOrderValue: Number(e.target.value),
+                    })
+                  }
+                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+                />
+              </div>
+
+              {newPromo.scope === "product" && (
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">
+                    Sản phẩm áp dụng ({promoProductIds.length} đã chọn)
+                  </label>
+                  <div className="max-h-32 overflow-auto border border-slate-200 rounded-lg divide-y divide-slate-100">
+                    {products.map((p) => (
+                      <label
+                        key={p.id}
+                        className="flex items-center gap-2 px-2 py-1.5 cursor-pointer hover:bg-slate-50"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={promoProductIds.includes(p.id)}
+                          onChange={(e) =>
+                            setPromoProductIds((prev) =>
+                              e.target.checked
+                                ? [...prev, p.id]
+                                : prev.filter((x) => x !== p.id),
+                            )
+                          }
+                          className="rounded text-[#004885]"
+                        />
+                        <span>{p.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={promoActivateNow}
+                  onChange={(e) => setPromoActivateNow(e.target.checked)}
+                  className="rounded text-[#004885]"
+                />
+                <span className="text-slate-700 font-medium">
+                  Kích hoạt ngay sau khi tạo (bỏ chọn = lưu nháp)
+                </span>
+              </label>
+
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
@@ -943,9 +1150,10 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold shadow-xs"
+                  disabled={promoSaving}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold shadow-xs disabled:opacity-60"
                 >
-                  Tạo chương trình khuyến mãi
+                  {promoSaving ? "Đang lưu..." : "Tạo chương trình khuyến mãi"}
                 </button>
               </div>
             </form>

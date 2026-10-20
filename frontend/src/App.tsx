@@ -6,14 +6,11 @@ import { QuanLyKho } from "./components/inventory/QuanLyKho";
 import { QuanLyNhanVien } from "./components/staff/QuanLyNhanVien";
 import { QuanLyNhaCungCap } from "./components/suppliers/QuanLyNhaCungCap";
 import { BaoCaoThongKe } from "./components/reports/BaoCaoThongKe";
-import {
-  INITIAL_BATCHES,
-  INITIAL_STAFF,
-  INITIAL_PROMOTIONS,
-  INITIAL_INVOICES,
-} from "./data/initialData";
-import { Batch, Staff, Promotion, Invoice, InvoiceApproval } from "./types";
+import { INITIAL_STAFF, INITIAL_INVOICES } from "./data/initialData";
+import { Staff, Invoice, InvoiceApproval } from "./types";
 import { useProducts } from "./hooks/useProducts";
+import { useBatches } from "./hooks/useBatches";
+import { usePromotions } from "./hooks/usePromotions";
 
 export default function App() {
   const [activeModule, setActiveModule] = useState<number>(1); // 1 to 6
@@ -21,10 +18,14 @@ export default function App() {
   // ===== Dữ liệu đã nối API: state + gọi API nằm trong hook =====
   const { products, addProduct, updateProductPrice } = useProducts();
 
+  // Lô hàng lấy từ DB, dùng chung cho Navbar, Kho, POS, Báo cáo
+  const { batches, setBatches, reload: reloadBatches } = useBatches();
+
   // ===== Dữ liệu tạm (dữ liệu giả, sẽ nối API ở các module sau) =====
-  const [batches, setBatches] = useState<Batch[]>(INITIAL_BATCHES);
   const [staffList, setStaffList] = useState<Staff[]>(INITIAL_STAFF);
-  const [promotions, setPromotions] = useState<Promotion[]>(INITIAL_PROMOTIONS);
+  // Khuyến mãi lấy từ DB (/api/promotions)
+  const { promotions, createPromotion, changePromotionStatus } =
+    usePromotions();
   const [invoices, setInvoices] = useState<Invoice[]>(INITIAL_INVOICES);
 
   // Nhân viên đang thao tác. TODO: thay bằng tài khoản đăng nhập (auth_sessions) khi có màn hình đăng nhập.
@@ -126,22 +127,6 @@ export default function App() {
   const handleCancelInvoice = (invoiceId: string, input: ApprovalInput) =>
     applyApproval(invoiceId, "cancel", input);
 
-  // 2. Promotion handler (TODO: nối API khi làm module khuyến mãi)
-  const handleAddPromotion = (newPromo: Promotion) => {
-    setPromotions((prev) => [...prev, newPromo]);
-  };
-
-  // 3. Inventory handlers
-  const handleAddBatch = (newBatch: Batch) => {
-    setBatches((prev) => [newBatch, ...prev]);
-  };
-
-  const handleAdjustStock = (batchId: string, newQuantity: number) => {
-    setBatches((prev) =>
-      prev.map((b) => (b.id === batchId ? { ...b, quantity: newQuantity } : b)),
-    );
-  };
-
   // Kiểm kê: đã chuyển sang gọi API trực tiếp trong QuanLyKho (/api/stock-audits)
 
   // 4. Staff handlers
@@ -186,14 +171,16 @@ export default function App() {
               promotions={promotions}
               onUpdateProductPrice={updateProductPrice}
               onAddProduct={addProduct}
-              onAddPromotion={handleAddPromotion}
+              onCreatePromotion={createPromotion}
+              onChangePromotionStatus={changePromotionStatus}
             />
           )}
 
           {activeModule === 3 && (
             <QuanLyKho
               products={products}
-              onAdjustStock={handleAdjustStock}
+              batches={batches}
+              reloadBatches={reloadBatches}
               currentStaff={currentStaff}
             />
           )}
