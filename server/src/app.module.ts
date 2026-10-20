@@ -11,9 +11,10 @@ import { StockMovementsModule } from './stock-movements/stock-movements.module';
 import { GoodsReceiptsModule } from './goods-receipts/goods-receipts.module';
 import { StockAuditsModule } from './stock-audits/stock-audits.module';
 import { PromotionsModule } from './promotions/promotions.module';
+import { InvoicesModule } from './invoices/invoices.module';
 
 @Module({
-  imports: [PrismaModule, ProductsModule, SuppliersModule, PurchaseOrdersModule, BatchesModule, CategoriesModule, StockMovementsModule, GoodsReceiptsModule, StockAuditsModule, PromotionsModule],
+  imports: [PrismaModule, ProductsModule, SuppliersModule, PurchaseOrdersModule, BatchesModule, CategoriesModule, StockMovementsModule, GoodsReceiptsModule, StockAuditsModule, PromotionsModule, InvoicesModule],
   controllers: [AppController],
   providers: [AppService],
 })
