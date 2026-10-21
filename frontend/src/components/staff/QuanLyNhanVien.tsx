@@ -1,29 +1,28 @@
 import React, { useState } from "react";
-import {
-  UserCheck,
-  ShieldCheck,
-  Clock,
-  UserPlus,
-  KeyRound,
-  Search,
-  Phone,
-  Mail,
-  CheckCircle,
-  X,
-} from "lucide-react";
+import { UserPlus, Search, X } from "lucide-react";
 import { Staff } from "../../types";
 import { SHIFT_LABELS, SHIFT_LIST } from "../../lib/labels";
+import { RoleGroupsManager } from "./RoleGroupsManager";
+import type { PermissionItem, RoleGroup } from "../../hooks/useRoleGroups";
 
 interface QuanLyNhanVienProps {
   staffList: Staff[];
   onAddStaff: (staff: Staff) => void;
   onUpdateShift: (staffId: string, newShift: Staff["shift"]) => void;
+  roles: RoleGroup[] | null;
+  permissions: PermissionItem[];
+  roleLoadError: string;
+  reloadRoles: () => Promise<void>;
 }
 
 export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
   staffList,
   onAddStaff,
   onUpdateShift,
+  roles,
+  permissions,
+  roleLoadError,
+  reloadRoles,
 }) => {
   const [search, setSearch] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
@@ -122,42 +121,12 @@ export const QuanLyNhanVien: React.FC<QuanLyNhanVienProps> = ({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Role Permissions Summary Box (5.1) */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
-          <h4 className="font-bold text-xs text-slate-900 flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-[#004885]" />
-            <span>5.1 Ma trận phân quyền chức năng</span>
-          </h4>
-          <div className="space-y-2 text-xs">
-            <div className="p-2 bg-sky-50 rounded border border-sky-100">
-              <span className="font-bold text-sky-900 block">
-                Quản lý cửa hàng
-              </span>
-              <span className="text-[11px] text-sky-700">
-                Toàn quyền: duyệt đổi trả/hoàn tiền, duyệt kết ca và kiểm kê,
-                chỉnh giá, khuyến mãi, tài khoản & phân quyền, báo cáo.
-              </span>
-            </div>
-            <div className="p-2 bg-emerald-50 rounded border border-emerald-100">
-              <span className="font-bold text-emerald-900 block">
-                Thu ngân (Cashier)
-              </span>
-              <span className="text-[11px] text-emerald-700">
-                Tra cứu sản phẩm, tạo đơn POS, thanh toán nhiều hình thức, xác
-                nhận chuyển khoản, mở/kết ca thu ngân.
-              </span>
-            </div>
-            <div className="p-2 bg-amber-50 rounded border border-amber-100">
-              <span className="font-bold text-amber-900 block">
-                Thủ kho (Warehouse)
-              </span>
-              <span className="text-[11px] text-amber-700">
-                Nhập kho lô hàng, xuất kho, kiểm soát HSD, kiểm kê kho, lập đơn
-                đặt hàng.
-              </span>
-            </div>
-          </div>
-        </div>
+        <RoleGroupsManager
+          roles={roles}
+          permissions={permissions}
+          loadError={roleLoadError}
+          onReload={reloadRoles}
+        />
 
         {/* Staff List & Shift Management (5.2) */}
         <div className="lg:col-span-2 bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-4">

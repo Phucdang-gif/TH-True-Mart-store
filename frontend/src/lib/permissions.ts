@@ -1,15 +1,18 @@
-import type { StaffRole } from "../types";
-
-/**
- * Quyền truy cập các màn hình điều hướng theo vai trò.
- * Khi API đăng nhập sẵn sàng, thay role lấy từ hồ sơ nhân viên đã xác thực.
- */
-export const MODULE_PERMISSIONS: Record<StaffRole, readonly number[]> = {
-  manager: [1, 2, 3, 4, 5, 6],
-  cashier: [1],
-  warehouse: [2, 3, 5],
+const MODULE_PERMISSION_CODES: Record<number, readonly string[]> = {
+  1: ["product:view", "invoice:create", "invoice:view", "payment:process"],
+  2: ["product:view", "product:manage", "product:price", "category:manage", "promotion:manage"],
+  3: ["batch:import", "stock:export", "stock:audit", "stock:audit_approve", "stock:alert"],
+  4: ["staff:manage"],
+  5: ["supplier:view", "supplier:manage", "purchase:create"],
+  6: ["report:view"],
 };
 
-export function canAccessModule(role: StaffRole, moduleId: number): boolean {
-  return MODULE_PERMISSIONS[role]?.includes(moduleId) ?? false;
+/** A module link is visible when its role has at least one permission for it. */
+export function canAccessModule(
+  permissionCodes: readonly string[] | null,
+  moduleId: number,
+): boolean {
+  // Keep the prototype usable while role configuration is loading.
+  if (permissionCodes === null) return true;
+  return (MODULE_PERMISSION_CODES[moduleId] ?? []).some((code) => permissionCodes.includes(code));
 }

@@ -14,6 +14,7 @@ import { useBatches } from "./hooks/useBatches";
 import { usePromotions } from "./hooks/usePromotions";
 import { useInvoices } from "./hooks/useInvoices";
 import { canAccessModule } from "./lib/permissions";
+import { useRoleGroups } from "./hooks/useRoleGroups";
 
 export default function App() {
   const [activeModule, setActiveModule] = useState<number>(1); // 1 to 6
@@ -26,6 +27,7 @@ export default function App() {
 
   // ===== Dữ liệu tạm (dữ liệu giả, sẽ nối API ở các module sau) =====
   const [staffList, setStaffList] = useState<Staff[]>(INITIAL_STAFF);
+  const { roles, permissions, error: roleLoadError, reload: reloadRoles } = useRoleGroups();
   // Khuyến mãi lấy từ DB (/api/promotions)
   const {
     promotions,
@@ -41,11 +43,19 @@ export default function App() {
     staffList[0];
 
   // Không chỉ ẩn link: mọi đường dẫn đổi module cũng phải qua kiểm tra quyền.
-  const visibleActiveModule = canAccessModule(currentStaff.role, activeModule)
+  const rolePermissions = roles === null
+    ? null
+    : roles.find((role) => role.code === currentStaff.role)?.role_permissions.map(
+        (link) => link.permissions.code,
+      ) ?? [];
+  const firstAllowedModule = [1, 2, 3, 4, 5, 6].find((moduleId) =>
+    canAccessModule(rolePermissions, moduleId),
+  );
+  const visibleActiveModule = canAccessModule(rolePermissions, activeModule)
     ? activeModule
-    : 1;
+    : firstAllowedModule ?? 0;
   const handleSetActiveModule = (moduleId: number) => {
-    if (canAccessModule(currentStaff.role, moduleId)) {
+    if (canAccessModule(rolePermissions, moduleId)) {
       setActiveModule(moduleId);
     }
   };
@@ -89,7 +99,7 @@ export default function App() {
         activeModule={visibleActiveModule}
         setActiveModule={handleSetActiveModule}
         expiringCount={expiringCount}
-        role={currentStaff.role}
+        permissionCodes={rolePermissions}
       />
 
       {/* Main Container */}
@@ -130,6 +140,10 @@ export default function App() {
               staffList={staffList}
               onAddStaff={handleAddStaff}
               onUpdateShift={handleUpdateShift}
+              roles={roles}
+              permissions={permissions}
+              roleLoadError={roleLoadError}
+              reloadRoles={reloadRoles}
             />
           )}
 
