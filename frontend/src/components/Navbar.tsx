@@ -1,4 +1,6 @@
 import React from 'react';
+import type { StaffRole } from '../types';
+import { canAccessModule } from '../lib/permissions';
 import { 
   Store, 
   ShoppingCart, 
@@ -16,12 +18,14 @@ interface NavbarProps {
   activeModule: number;
   setActiveModule: (mod: number) => void;
   expiringCount: number;
+  role: StaffRole;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
   activeModule,
   setActiveModule,
-  expiringCount
+  expiringCount,
+  role,
 }) => {
   const [currentTime, setCurrentTime] = React.useState<string>('');
 
@@ -85,7 +89,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       {/* Secondary Navigation: 6 Modules */}
       <div className="bg-slate-50 border-b border-slate-200 overflow-x-auto scrollbar-none">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 flex space-x-1 py-1.5">
-          {bfdModules.map((module) => {
+          {bfdModules.filter((module) => canAccessModule(role, module.id)).map((module) => {
             const Icon = module.icon;
             const isActive = activeModule === module.id;
             return (

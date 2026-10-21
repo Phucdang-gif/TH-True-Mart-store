@@ -13,6 +13,7 @@ import { useProducts } from "./hooks/useProducts";
 import { useBatches } from "./hooks/useBatches";
 import { usePromotions } from "./hooks/usePromotions";
 import { useInvoices } from "./hooks/useInvoices";
+import { canAccessModule } from "./lib/permissions";
 
 export default function App() {
   const [activeModule, setActiveModule] = useState<number>(1); // 1 to 6
@@ -38,6 +39,16 @@ export default function App() {
   const currentStaff: Staff =
     staffList.find((s) => s.role === "manager" && s.status === "active") ||
     staffList[0];
+
+  // Không chỉ ẩn link: mọi đường dẫn đổi module cũng phải qua kiểm tra quyền.
+  const visibleActiveModule = canAccessModule(currentStaff.role, activeModule)
+    ? activeModule
+    : 1;
+  const handleSetActiveModule = (moduleId: number) => {
+    if (canAccessModule(currentStaff.role, moduleId)) {
+      setActiveModule(moduleId);
+    }
+  };
 
   // Expiring Batches calculation for urgent badge in Navbar
   const getDaysLeft = (expiryDateStr: string) => {
@@ -75,15 +86,16 @@ export default function App() {
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800">
       {/* Top Main Navigation Bar with 6 modules */}
       <Navbar
-        activeModule={activeModule}
-        setActiveModule={setActiveModule}
+        activeModule={visibleActiveModule}
+        setActiveModule={handleSetActiveModule}
         expiringCount={expiringCount}
+        role={currentStaff.role}
       />
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6">
         <div>
-          {activeModule === 1 && (
+          {visibleActiveModule === 1 && (
             <BanHangPOS
               products={products}
               batches={batches}
@@ -93,7 +105,7 @@ export default function App() {
             />
           )}
 
-          {activeModule === 2 && (
+          {visibleActiveModule === 2 && (
             <QuanLyHangHoa
               products={products}
               promotions={promotions}
@@ -104,7 +116,7 @@ export default function App() {
             />
           )}
 
-          {activeModule === 3 && (
+          {visibleActiveModule === 3 && (
             <QuanLyKho
               products={products}
               batches={batches}
@@ -113,7 +125,7 @@ export default function App() {
             />
           )}
 
-          {activeModule === 4 && (
+          {visibleActiveModule === 4 && (
             <QuanLyNhanVien
               staffList={staffList}
               onAddStaff={handleAddStaff}
@@ -121,9 +133,9 @@ export default function App() {
             />
           )}
 
-          {activeModule === 5 && <QuanLyNhaCungCap products={products} />}
+          {visibleActiveModule === 5 && <QuanLyNhaCungCap products={products} />}
 
-          {activeModule === 6 && (
+          {visibleActiveModule === 6 && (
             <BaoCaoThongKe
               invoices={invoices}
               products={products}
