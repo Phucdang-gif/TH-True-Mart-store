@@ -47,6 +47,8 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [cart, setCart] = useState<CartLine[]>([]);
+  const [qtyDraft, setQtyDraft] = useState<Record<string, string>>({});
+  const [qtyNotice, setQtyNotice] = useState<string | null>(null);
 
   // Mã giảm giá thu ngân nhập tay (khuyến mãi requiresCode)
   const [promoCode, setPromoCode] = useState("");
@@ -128,6 +130,8 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
   // Change quantity
   const updateQuantity = (index: number, delta: number) => {
     const line = cart[index];
+    clearQtyDraft(line.product.id);
+    setQtyNotice(null);
     const newQty = line.quantity + delta;
     if (newQty <= 0) {
       setCart(cart.filter((_, i) => i !== index));
@@ -139,6 +143,39 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
       return;
     }
     setCart(cart.map((l, i) => (i === index ? { ...l, quantity: newQty } : l)));
+  };
+  const clearQtyDraft = (productId: string) =>
+    setQtyDraft((d) => {
+      const { [productId]: _removed, ...rest } = d;
+      return rest;
+    });
+
+  // Gõ số lượng từ bàn phím: chỉ nhận chữ số, vượt tồn thì tự đưa về số tối đa còn bán được
+  const setQuantity = (index: number, raw: string) => {
+    const line = cart[index];
+    const key = line.product.id;
+    const digits = raw.replace(/\D/g, "").slice(0, 4);
+    setQtyDraft((d) => ({ ...d, [key]: digits }));
+    if (digits === "") return; // đang xóa để gõ số mới: chưa đổi giỏ hàng
+    const n = parseInt(digits, 10);
+    if (n < 1) return; // số 0 chưa hợp lệ: chờ gõ tiếp hoặc về số cũ khi rời ô
+    const available = availableQty(key);
+    if (available < 1) {
+      setQtyNotice(`Sản phẩm "${line.product.name}" đã hết hàng trong kho.`);
+      return;
+    }
+    if (n > available) {
+      setQtyDraft((d) => ({ ...d, [key]: String(available) }));
+      setQtyNotice(
+        `Sản phẩm "${line.product.name}" chỉ còn ${available} trong kho.`,
+      );
+      setCart(
+        cart.map((l, i) => (i === index ? { ...l, quantity: available } : l)),
+      );
+      return;
+    }
+    setQtyNotice(null);
+    setCart(cart.map((l, i) => (i === index ? { ...l, quantity: n } : l)));
   };
 
   // Mỗi khi giỏ hoặc mã đổi: hỏi server tính lại (giá, lô FIFO, khuyến mãi tự động, mã giảm giá)
@@ -490,9 +527,21 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                           >
                             <Minus className="w-3 h-3" />
                           </button>
-                          <span className="text-xs font-bold px-1.5 min-w-[20px] text-center">
-                            {item.quantity}
-                          </span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={
+                              qtyDraft[item.product.id] ?? String(item.quantity)
+                            }
+                            onChange={(e) => setQuantity(idx, e.target.value)}
+                            onFocus={(e) => e.target.select()}
+                            onBlur={() => clearQtyDraft(item.product.id)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") e.currentTarget.blur();
+                            }}
+                            aria-label={`Số lượng ${item.product.name}`}
+                            className="w-10 text-xs font-bold text-center bg-transparent rounded outline-hidden focus:bg-sky-50"
+                          />
                           <button
                             onClick={() => updateQuantity(idx, 1)}
                             className="w-5 h-5 flex items-center justify-center text-slate-500 hover:bg-slate-100 rounded"
@@ -518,6 +567,11 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
               {previewError && (
                 <p className="text-[11px] text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-1.5">
                   {previewError}
+                </p>
+              )}
+              {qtyNotice && (
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                  {qtyNotice}
                 </p>
               )}
 
