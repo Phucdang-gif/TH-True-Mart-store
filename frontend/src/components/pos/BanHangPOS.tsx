@@ -1,73 +1,62 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Search,
-  Barcode,
   Plus,
   Minus,
   Trash2,
-  CreditCard,
   Banknote,
   QrCode,
-  Sparkles,
   Tag,
-  RotateCcw,
-  XCircle,
   Eye,
-  AlertTriangle,
+  CreditCard,
 } from "lucide-react";
-import {
-  Product,
-  Batch,
-  Promotion,
-  Invoice,
-  InvoicePayment,
-  InvoiceApproval,
-  CartItem,
-  Staff,
-  PaymentMethod,
-} from "../../types";
+import { Product, Batch, Invoice, InvoicePreview } from "../../types";
+import type { CreateInvoiceInput, PreviewInvoiceInput } from "../../types/api";
 import {
   CATEGORY_LABELS,
   CATEGORY_LIST,
   INVOICE_STATUS_LABELS,
   PAYMENT_METHOD_LABELS,
 } from "../../lib/labels";
+import { InvoiceModal } from "../InvoiceModal";
 
 interface BanHangPOSProps {
   products: Product[];
   batches: Batch[];
-  currentStaff: Staff; // nhân viên đang đăng nhập (thu ngân / quản lý)
-  promotions: Promotion[];
   invoices: Invoice[];
-  onCompleteSale: (invoice: Invoice) => void;
-  onReturnInvoice: (
-    invoiceId: string,
-    approval: Omit<InvoiceApproval, "id" | "createdAt" | "action">,
-  ) => void;
-  onCancelInvoice: (
-    invoiceId: string,
-    approval: Omit<InvoiceApproval, "id" | "createdAt" | "action">,
-  ) => void;
+  // Server tính giá + khuyến mãi + chọn lô FIFO (không ghi dữ liệu)
+  onPreviewInvoice: (input: PreviewInvoiceInput) => Promise<InvoicePreview>;
+  // Chốt hóa đơn: thanh toán + trừ kho. Ném lỗi nếu server từ chối.
+  onCreateInvoice: (input: CreateInvoiceInput) => Promise<Invoice>;
+}
+
+// Giỏ hàng chỉ giữ sản phẩm + số lượng; giá, lô và khuyến mãi do server quyết định
+interface CartLine {
+  product: Product;
+  quantity: number;
 }
 
 export const BanHangPOS: React.FC<BanHangPOSProps> = ({
   products,
   batches,
-  currentStaff,
-  promotions,
   invoices,
-  onCompleteSale,
-  onReturnInvoice,
-  onCancelInvoice,
+  onPreviewInvoice,
+  onCreateInvoice,
 }) => {
   const [subTab, setSubTab] = useState<"pos" | "history">("pos");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
-  const [cart, setCart] = useState<CartItem[]>([]);
+  const [cart, setCart] = useState<CartLine[]>([]);
 
-  // Promotion state
+  // Mã giảm giá thu ngân nhập tay (khuyến mãi requiresCode)
   const [promoCode, setPromoCode] = useState("");
-  const [appliedPromo, setAppliedPromo] = useState<Promotion | null>(null);
+  const [appliedVoucher, setAppliedVoucher] = useState<string | null>(null);
+  const [voucherNotice, setVoucherNotice] = useState<string | null>(null);
+
+  // Kết quả server tính cho giỏ hiện tại
+  const [preview, setPreview] = useState<InvoicePreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   // Payment state: thanh toán nhiều hình thức (bảng invoice_payments)
   const [cashGiven, setCashGiven] = useState<number>(0);
@@ -76,17 +65,10 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
   const [cardAmount, setCardAmount] = useState<number>(0);
   const [cardRef, setCardRef] = useState("");
   const [notes, setNotes] = useState("");
+  const [checkingOut, setCheckingOut] = useState(false);
 
-  // Return / Cancel modal state
-  const [selectedInvoiceForAction, setSelectedInvoiceForAction] =
-    useState<Invoice | null>(null);
-  const [actionType, setActionType] = useState<"return" | "cancel" | null>(
-    null,
-  );
-  const [actionReason, setActionReason] = useState("");
-  const [refundMethod, setRefundMethod] = useState<PaymentMethod>("cash");
-  const [refundRef, setRefundRef] = useState("");
-  const isManager = currentStaff.role === "manager"; // quyền invoice:approve
+  // Hóa đơn đang xem / in (sau khi thanh toán hoặc bấm "Xem" ở lịch sử)
+  const [printInvoice, setPrintInvoice] = useState<Invoice | null>(null);
 
   // Categories list (mã enum của DB)
   const categories: string[] = ["all", ...CATEGORY_LIST];
@@ -101,95 +83,109 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
     return matchesCat && matchesSearch;
   });
 
-  // Helper to find earliest expiry batch (FIFO)
-  const getFIFOBatch = (productId: string): Batch | undefined => {
+  // Lô còn bán được: còn hàng và chưa hết hạn, hết hạn sớm nhất xếp trước (khớp quy tắc FIFO của server)
+  const sellableBatches = (productId: string): Batch[] => {
+    const now = new Date();
     return batches
-      .filter((b) => b.productId === productId && b.quantity > 0)
+      .filter(
+        (b) =>
+          b.productId === productId &&
+          b.quantity > 0 &&
+          new Date(b.expiryDate) >= now,
+      )
       .sort(
         (a, b) =>
           new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime(),
-      )[0];
+      );
   };
+  const getFIFOBatch = (productId: string): Batch | undefined =>
+    sellableBatches(productId)[0];
+  const availableQty = (productId: string): number =>
+    sellableBatches(productId).reduce((s, b) => s + b.quantity, 0);
+
+  const toItems = () =>
+    cart.map((i) => ({ productId: i.product.id, quantity: i.quantity }));
 
   // Add to cart
   const addToCart = (product: Product) => {
-    const availableBatch = getFIFOBatch(product.id);
-    const existingIndex = cart.findIndex(
-      (item) => item.product.id === product.id,
-    );
-
-    if (existingIndex > 0 || existingIndex === 0) {
-      const updated = [...cart];
-      updated[existingIndex].quantity += 1;
-      const unitPrice = product.sellingPrice;
-      const discount = product.discountPercent
-        ? (unitPrice * product.discountPercent) / 100
-        : 0;
-      updated[existingIndex].total =
-        (unitPrice - discount) * updated[existingIndex].quantity;
-      setCart(updated);
-    } else {
-      const unitPrice = product.sellingPrice;
-      const discount = product.discountPercent
-        ? (unitPrice * product.discountPercent) / 100
-        : 0;
-      setCart([
-        ...cart,
-        {
-          product,
-          selectedBatch: availableBatch,
-          quantity: 1,
-          unitPrice,
-          discount,
-          total: unitPrice - discount,
-        },
-      ]);
+    const inCart = cart.find((i) => i.product.id === product.id)?.quantity ?? 0;
+    const available = availableQty(product.id);
+    if (inCart + 1 > available) {
+      alert(`Sản phẩm "${product.name}" chỉ còn ${available} trong kho.`);
+      return;
     }
+    setCart((prev) =>
+      prev.some((i) => i.product.id === product.id)
+        ? prev.map((i) =>
+            i.product.id === product.id
+              ? { ...i, quantity: i.quantity + 1 }
+              : i,
+          )
+        : [...prev, { product, quantity: 1 }],
+    );
   };
 
   // Change quantity
   const updateQuantity = (index: number, delta: number) => {
-    const updated = [...cart];
-    const newQty = updated[index].quantity + delta;
+    const line = cart[index];
+    const newQty = line.quantity + delta;
     if (newQty <= 0) {
-      updated.splice(index, 1);
-    } else {
-      updated[index].quantity = newQty;
-      const unitPrice = updated[index].product.sellingPrice;
-      const discount = updated[index].discount;
-      updated[index].total = (unitPrice - discount) * newQty;
+      setCart(cart.filter((_, i) => i !== index));
+      return;
     }
-    setCart(updated);
+    const available = availableQty(line.product.id);
+    if (newQty > available) {
+      alert(`Sản phẩm "${line.product.name}" chỉ còn ${available} trong kho.`);
+      return;
+    }
+    setCart(cart.map((l, i) => (i === index ? { ...l, quantity: newQty } : l)));
   };
 
-  // Calculate totals
-  const subtotal = cart.reduce(
-    (acc, item) => acc + item.unitPrice * item.quantity,
-    0,
-  );
-  const itemDiscounts = cart.reduce(
-    (acc, item) => acc + item.discount * item.quantity,
-    0,
-  );
-
-  // Voucher discount (theo promotions.discountType, có trần maxDiscountAmount khi giảm %)
-  let voucherDiscount = 0;
-  if (appliedPromo) {
-    if (appliedPromo.discountType === "percentage") {
-      voucherDiscount = (subtotal * appliedPromo.value) / 100;
-      if (appliedPromo.maxDiscountAmount) {
-        voucherDiscount = Math.min(
-          voucherDiscount,
-          appliedPromo.maxDiscountAmount,
-        );
-      }
-    } else {
-      voucherDiscount = appliedPromo.value;
+  // Mỗi khi giỏ hoặc mã đổi: hỏi server tính lại (giá, lô FIFO, khuyến mãi tự động, mã giảm giá)
+  useEffect(() => {
+    if (cart.length === 0) {
+      setPreview(null);
+      setPreviewError(null);
+      setPreviewing(false);
+      return;
     }
-  }
+    let cancelled = false;
+    setPreviewing(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await onPreviewInvoice({
+          items: toItems(),
+          voucherCode: appliedVoucher ?? undefined,
+        });
+        if (cancelled) return;
+        setPreview(res);
+        setPreviewError(null);
+        setPreviewing(false);
+      } catch (err) {
+        if (cancelled) return;
+        const msg = err instanceof Error ? err.message : "Không tính được giá";
+        if (appliedVoucher) {
+          // Mã không còn dùng được với giỏ hiện tại: gỡ mã rồi tính lại
+          setVoucherNotice(`Đã gỡ mã ${appliedVoucher}: ${msg}`);
+          setAppliedVoucher(null);
+        } else {
+          setPreview(null);
+          setPreviewError(msg);
+          setPreviewing(false);
+        }
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cart, appliedVoucher]);
 
-  const totalDiscount = itemDiscounts + voucherDiscount;
-  const finalTotal = Math.max(0, subtotal - totalDiscount);
+  // Tổng tiền lấy từ server, giao diện không tự tính khuyến mãi
+  const subtotal = preview?.subtotal ?? 0;
+  const totalDiscount = preview?.discountAmount ?? 0;
+  const finalTotal = preview?.finalTotal ?? 0;
 
   // Tổng hợp các khoản thanh toán: chuyển khoản/thẻ không được vượt phần còn lại, tiền mặt được đưa dư để thối
   const nonCashPaid = transferAmount + cardAmount;
@@ -197,49 +193,35 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
   const totalReceived = cashGiven + nonCashPaid;
   const changeAmount = Math.max(0, totalReceived - finalTotal);
   const isPaidEnough = totalReceived >= finalTotal && nonCashPaid <= finalTotal;
+  const canCheckout =
+    cart.length > 0 &&
+    !!preview &&
+    !previewing &&
+    !previewError &&
+    isPaidEnough &&
+    !checkingOut;
 
-  // Handle Apply Promo
-  const handleApplyPromo = () => {
-    const promo = promotions.find(
-      (p) =>
-        p.code.toUpperCase() === promoCode.trim().toUpperCase() &&
-        p.status === "active",
-    );
-    if (!promo) {
-      alert(
-        "Mã khuyến mãi không hợp lệ hoặc chương trình không còn hoạt động!",
-      );
+  // Nhập mã giảm giá: server kiểm tra hạn dùng, lượt dùng, đơn tối thiểu (UC04)
+  const handleApplyVoucher = async () => {
+    const code = promoCode.trim().toUpperCase();
+    if (!code) return;
+    if (cart.length === 0) {
+      alert("Vui lòng thêm sản phẩm trước khi nhập mã giảm giá.");
       return;
     }
-    if (promo.usageLimit && promo.usedCount >= promo.usageLimit) {
-      alert("Mã khuyến mãi đã hết lượt sử dụng!");
-      return;
+    try {
+      await onPreviewInvoice({ items: toItems(), voucherCode: code });
+      setAppliedVoucher(code);
+      setVoucherNotice(null);
+      setPromoCode("");
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Mã giảm giá không hợp lệ");
     }
-    if (subtotal < promo.minOrderValue) {
-      alert(
-        `Đơn hàng phải từ ${promo.minOrderValue.toLocaleString("vi-VN")} đ để áp dụng mã này!`,
-      );
-      return;
-    }
-    setAppliedPromo(promo);
   };
 
   // Handle Checkout
-  const handleCheckout = () => {
-    if (cart.length === 0) {
-      alert("Giỏ hàng trống! Vui lòng chọn sản phẩm.");
-      return;
-    }
-    if (nonCashPaid > finalTotal) {
-      alert("Tổng chuyển khoản + thẻ không được vượt quá số tiền phải trả!");
-      return;
-    }
-    if (!isPaidEnough) {
-      alert(
-        "Số tiền thanh toán chưa đủ! Hóa đơn chỉ hoàn tất khi tổng các khoản đã nhận >= số tiền phải trả.",
-      );
-      return;
-    }
+  const handleCheckout = async () => {
+    if (!canCheckout) return;
     if (transferAmount > 0 && !transferRef.trim()) {
       alert(
         "Vui lòng nhập mã giao dịch chuyển khoản để xác nhận đã nhận tiền!",
@@ -251,96 +233,56 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
       return;
     }
 
-    const nowStr = new Date().toLocaleString("vi-VN");
-    const stamp = Date.now();
-    const newInvoiceCode = `HD-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(100 + Math.random() * 900)}`;
-
-    // Tách từng khoản thanh toán; tiền mặt ghi nhận sau khi trừ tiền thối
-    const cashApplied = Math.min(cashGiven, cashDue);
-    const payments: InvoicePayment[] = [];
-    if (cashApplied > 0) {
-      payments.push({
-        id: `pay-${stamp}-c`,
-        method: "cash",
-        amount: cashApplied,
-        status: "confirmed",
-        confirmedById: currentStaff.id,
-        confirmedAt: nowStr,
-      });
-    }
+    // Tiền mặt gửi lên là SỐ KHÁCH ĐƯA; server tự tính tiền thừa
+    const payments: CreateInvoiceInput["payments"] = [];
     if (transferAmount > 0) {
       payments.push({
-        id: `pay-${stamp}-t`,
         method: "transfer",
-        amount: transferAmount,
-        status: "confirmed",
+        amount: Math.round(transferAmount),
         reference: transferRef.trim(),
-        confirmedById: currentStaff.id,
-        confirmedAt: nowStr,
       });
     }
     if (cardAmount > 0) {
       payments.push({
-        id: `pay-${stamp}-k`,
         method: "card",
-        amount: cardAmount,
-        status: "confirmed",
+        amount: Math.round(cardAmount),
         reference: cardRef.trim(),
-        confirmedById: currentStaff.id,
-        confirmedAt: nowStr,
       });
     }
-    const paymentMethod: PaymentMethod =
-      payments.length > 1 ? "mixed" : (payments[0]?.method ?? "cash");
+    if (cashDue > 0) {
+      payments.push({ method: "cash", amount: Math.round(cashGiven) });
+    }
 
-    const newInvoice: Invoice = {
-      id: `inv-${stamp}`,
-      code: newInvoiceCode,
-      createdAt: nowStr,
-      cashierId: currentStaff.id,
-      cashierName: currentStaff.name,
-      items: cart.map((item) => ({
-        productId: item.product.id,
-        productCode: item.product.code,
-        productName: item.product.name,
-        batchId: item.selectedBatch?.id,
-        batchCode: item.selectedBatch?.batchCode || "LOTH-DEFAULT",
-        unit: item.product.unit,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        discount: item.discount,
-        subtotal: item.total,
-      })),
-      subtotal,
-      discountAmount: totalDiscount,
-      voucherCode: appliedPromo?.code,
-      finalTotal,
-      paymentMethod,
-      payments,
-      receivedAmount: totalReceived,
-      changeAmount,
-      paidAt: nowStr,
-      status: "completed",
-      notes,
-    };
+    setCheckingOut(true);
+    try {
+      const invoice = await onCreateInvoice({
+        items: toItems(),
+        voucherCode: appliedVoucher ?? undefined,
+        payments,
+        notes: notes.trim() || undefined,
+      });
+      setPrintInvoice(invoice); // mở hóa đơn để in
 
-    onCompleteSale(newInvoice);
-
-    // Reset cart
-    setCart([]);
-    setAppliedPromo(null);
-    setPromoCode("");
-    setCashGiven(0);
-    setTransferAmount(0);
-    setTransferRef("");
-    setCardAmount(0);
-    setCardRef("");
-    setNotes("");
+      setCart([]);
+      setAppliedVoucher(null);
+      setVoucherNotice(null);
+      setPromoCode("");
+      setCashGiven(0);
+      setTransferAmount(0);
+      setTransferRef("");
+      setCardAmount(0);
+      setCardRef("");
+      setNotes("");
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Không thể hoàn tất hóa đơn");
+    } finally {
+      setCheckingOut(false);
+    }
   };
 
   return (
     <div className="space-y-4">
-      {/* Sub navigation between POS & Invoice History (1.4 Return / Cancel) */}
+      {/* Sub navigation between POS & Invoice History */}
       <div className="flex items-center justify-between border-b border-slate-200 pb-3">
         <div className="flex items-center gap-2">
           <button
@@ -363,7 +305,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                 : "bg-slate-100 text-slate-700 hover:bg-slate-200"
             }`}
           >
-            1.4 Đổi trả & Hủy hóa đơn ({invoices.length})
+            Lịch sử hóa đơn ({invoices.length})
           </button>
         </div>
       </div>
@@ -423,11 +365,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                     onClick={() => addToCart(product)}
                     className="bg-white border border-slate-200 hover:border-sky-500 hover:shadow-md rounded-xl p-3.5 flex flex-col justify-between cursor-pointer transition-all group relative overflow-hidden"
                   >
-                    {product.discountPercent && (
-                      <span className="absolute top-2 right-2 bg-rose-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">
-                        -{product.discountPercent}%
-                      </span>
-                    )}
+                    {/* Vùng 2: đã xóa huy hiệu discountPercent */}
 
                     <div className="space-y-1.5">
                       <span className="text-[10px] font-semibold text-[#004885] bg-sky-50 px-2 py-0.5 rounded inline-block">
@@ -502,7 +440,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                 )}
               </div>
 
-              {/* Cart List */}
+              {/* Vùng 3: Cart List – giá và giảm giá lấy từ kết quả server tính */}
               <div className="space-y-2.5 max-h-[220px] overflow-y-auto pr-1">
                 {cart.length === 0 ? (
                   <div className="text-center py-8 text-slate-400 space-y-1">
@@ -512,70 +450,90 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                     </p>
                   </div>
                 ) : (
-                  cart.map((item, idx) => (
-                    <div
-                      key={idx}
-                      className="bg-slate-50 p-2.5 rounded-lg border border-slate-200/80 flex items-center justify-between gap-2"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-semibold text-slate-800 truncate">
-                          {item.product.name}
-                        </p>
-                        <span className="text-xs font-bold text-[#004885]">
-                          {(item.unitPrice - item.discount).toLocaleString(
-                            "vi-VN",
-                          )}{" "}
-                          đ
-                        </span>
-                      </div>
-
-                      {/* Quantity Controls */}
-                      <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-md p-0.5">
-                        <button
-                          onClick={() => updateQuantity(idx, -1)}
-                          className="w-5 h-5 flex items-center justify-center text-slate-500 hover:bg-slate-100 rounded"
-                        >
-                          <Minus className="w-3 h-3" />
-                        </button>
-                        <span className="text-xs font-bold px-1.5 min-w-[20px] text-center">
-                          {item.quantity}
-                        </span>
-                        <button
-                          onClick={() => updateQuantity(idx, 1)}
-                          className="w-5 h-5 flex items-center justify-center text-slate-500 hover:bg-slate-100 rounded"
-                        >
-                          <Plus className="w-3 h-3" />
-                        </button>
-                      </div>
-
-                      <button
-                        onClick={() => {
-                          const c = [...cart];
-                          c.splice(idx, 1);
-                          setCart(c);
-                        }}
-                        className="text-slate-400 hover:text-rose-600 p-1"
+                  cart.map((item, idx) => {
+                    const lines =
+                      preview?.lines.filter(
+                        (l) => l.productId === item.product.id,
+                      ) ?? [];
+                    const gross = item.product.sellingPrice * item.quantity;
+                    const lineDiscount = lines.reduce(
+                      (s, l) => s + l.discount,
+                      0,
+                    );
+                    const lineTotal = preview
+                      ? lines.reduce((s, l) => s + l.subtotal, 0)
+                      : gross;
+                    return (
+                      <div
+                        key={item.product.id}
+                        className="bg-slate-50 p-2.5 rounded-lg border border-slate-200/80 flex items-center justify-between gap-2"
                       >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-slate-800 truncate">
+                            {item.product.name}
+                          </p>
+                          <span className="text-xs font-bold text-[#004885]">
+                            {lineTotal.toLocaleString("vi-VN")} đ
+                          </span>
+                          {lineDiscount > 0 && (
+                            <span className="ml-1.5 text-[10px] text-rose-600">
+                              (giảm {lineDiscount.toLocaleString("vi-VN")} đ)
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Quantity Controls */}
+                        <div className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-md p-0.5">
+                          <button
+                            onClick={() => updateQuantity(idx, -1)}
+                            className="w-5 h-5 flex items-center justify-center text-slate-500 hover:bg-slate-100 rounded"
+                          >
+                            <Minus className="w-3 h-3" />
+                          </button>
+                          <span className="text-xs font-bold px-1.5 min-w-[20px] text-center">
+                            {item.quantity}
+                          </span>
+                          <button
+                            onClick={() => updateQuantity(idx, 1)}
+                            className="w-5 h-5 flex items-center justify-center text-slate-500 hover:bg-slate-100 rounded"
+                          >
+                            <Plus className="w-3 h-3" />
+                          </button>
+                        </div>
+
+                        <button
+                          onClick={() =>
+                            setCart(cart.filter((_, i) => i !== idx))
+                          }
+                          className="text-slate-400 hover:text-rose-600 p-1"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    );
+                  })
                 )}
               </div>
 
-              {/* Promotion Voucher (1.3) */}
+              {previewError && (
+                <p className="text-[11px] text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-1.5">
+                  {previewError}
+                </p>
+              )}
+
+              {/* Vùng 4: Mã giảm giá (UC04). Khuyến mãi không cần mã được server tự áp dụng. */}
               <div className="border-t border-slate-100 pt-3 space-y-2">
                 <label className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
                   <Tag className="w-3.5 h-3.5 text-rose-500" />
-                  <span>Mã khuyến mãi / Voucher</span>
+                  <span>Mã giảm giá</span>
                 </label>
-                {appliedPromo ? (
+                {appliedVoucher ? (
                   <div className="bg-emerald-50 p-2 rounded-lg border border-emerald-200 flex items-center justify-between text-xs text-emerald-800">
                     <span className="font-bold">
-                      ✓ {appliedPromo.code}: {appliedPromo.name}
+                      ✓ Đã áp dụng mã {appliedVoucher}
                     </span>
                     <button
-                      onClick={() => setAppliedPromo(null)}
+                      onClick={() => setAppliedVoucher(null)}
                       className="text-rose-600 font-bold hover:underline"
                     >
                       Hủy mã
@@ -585,20 +543,26 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                   <div className="flex gap-1.5">
                     <input
                       type="text"
-                      placeholder="Nhập mã voucher (VD: THVIP20K)..."
+                      placeholder="Nhập mã giảm giá (VD: GIAM20K)..."
                       value={promoCode}
                       onChange={(e) =>
                         setPromoCode(e.target.value.toUpperCase())
                       }
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleApplyVoucher();
+                      }}
                       className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-hidden focus:bg-white font-mono uppercase"
                     />
                     <button
-                      onClick={handleApplyPromo}
+                      onClick={handleApplyVoucher}
                       className="bg-sky-600 hover:bg-sky-700 text-white text-xs px-3 py-1.5 rounded-lg font-semibold"
                     >
                       Áp dụng
                     </button>
                   </div>
+                )}
+                {voucherNotice && (
+                  <p className="text-[11px] text-amber-700">{voucherNotice}</p>
                 )}
               </div>
 
@@ -630,6 +594,33 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                       value={transferRef}
                       onChange={(e) => setTransferRef(e.target.value)}
                       placeholder="Mã giao dịch chuyển khoản (đã nhận tiền)..."
+                      className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs font-mono"
+                    />
+                  )}
+                </div>
+
+                {/* Thẻ */}
+                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-600 flex items-center gap-1.5">
+                      <CreditCard className="w-4 h-4" /> Thẻ:
+                    </span>
+                    <input
+                      type="number"
+                      value={cardAmount || ""}
+                      onChange={(e) =>
+                        setCardAmount(Math.max(0, Number(e.target.value)))
+                      }
+                      placeholder="Số tiền..."
+                      className="w-32 px-2 py-1 bg-white border border-slate-300 rounded text-right font-bold text-xs"
+                    />
+                  </div>
+                  {cardAmount > 0 && (
+                    <input
+                      type="text"
+                      value={cardRef}
+                      onChange={(e) => setCardRef(e.target.value)}
+                      placeholder="Mã chuẩn chi thẻ..."
                       className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs font-mono"
                     />
                   )}
@@ -688,12 +679,21 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                 </div>
               </div>
 
-              {/* Order Summary Breakdown */}
+              {/* Vùng 5: Order Summary Breakdown (số liệu từ server) */}
               <div className="bg-slate-50 p-3 rounded-lg space-y-1.5 text-xs">
                 <div className="flex justify-between text-slate-600">
                   <span>Tổng tiền hàng:</span>
                   <span>{subtotal.toLocaleString("vi-VN")} đ</span>
                 </div>
+                {preview?.promotions.map((p) => (
+                  <div
+                    key={p.promotionId}
+                    className="flex justify-between text-rose-600"
+                  >
+                    <span>KM {p.code}:</span>
+                    <span>-{p.discountAmount.toLocaleString("vi-VN")} đ</span>
+                  </div>
+                ))}
                 {totalDiscount > 0 && (
                   <div className="flex justify-between text-rose-600 font-medium">
                     <span>Tổng giảm giá:</span>
@@ -702,18 +702,24 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                 )}
                 <div className="flex justify-between text-base font-extrabold text-[#004885] pt-1.5 border-t border-slate-200">
                   <span>KHÁCH PHẢI TRẢ:</span>
-                  <span>{finalTotal.toLocaleString("vi-VN")} đ</span>
+                  <span>
+                    {previewing
+                      ? "..."
+                      : `${finalTotal.toLocaleString("vi-VN")} đ`}
+                  </span>
                 </div>
               </div>
 
-              {/* Complete Sale Button */}
+              {/* Vùng 6: Complete Sale Button */}
               <button
                 id="btn-checkout-sale"
                 onClick={handleCheckout}
-                disabled={cart.length === 0 || !isPaidEnough}
+                disabled={!canCheckout}
                 className="w-full py-3 rounded-xl bg-[#004885] hover:bg-[#00386b] disabled:bg-slate-300 text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed"
               >
-                <span>Hoàn tất & In hóa đơn</span>
+                <span>
+                  {checkingOut ? "Đang xử lý..." : "Hoàn tất & In hóa đơn"}
+                </span>
                 <span className="text-xs bg-white/20 px-2 py-0.5 rounded font-mono">
                   F9
                 </span>
@@ -722,7 +728,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
           </div>
         </div>
       ) : (
-        /* SUBTAB 1.4: Đổi trả, hủy hóa đơn (Invoice History & Returns) */
+        /* Vùng 7: SUBTAB Lịch sử hóa đơn */
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4 shadow-xs">
           <div className="flex items-center justify-between border-b border-slate-200 pb-3">
             <div>
@@ -730,8 +736,7 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                 Danh sách hóa đơn bán hàng
               </h3>
               <p className="text-xs text-slate-500">
-                Tra cứu hóa đơn, thực hiện nghiệp vụ đổi trả hàng hoặc hủy hóa
-                đơn sai sót
+                Tra cứu hóa đơn đã bán và in lại hóa đơn cho khách
               </p>
             </div>
           </div>
@@ -791,32 +796,13 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                       </span>
                     </td>
                     <td className="py-2.5 px-3 text-right space-x-1.5 whitespace-nowrap">
-                      {inv.status === "completed" && (
-                        <>
-                          <button
-                            onClick={() => {
-                              setSelectedInvoiceForAction(inv);
-                              setActionType("return");
-                              setActionReason("");
-                            }}
-                            className="px-2 py-1 rounded bg-amber-50 text-amber-800 hover:bg-amber-100 font-semibold text-[11px] inline-flex items-center gap-1"
-                          >
-                            <RotateCcw className="w-3 h-3" />
-                            <span>Đổi trả</span>
-                          </button>
-                          <button
-                            onClick={() => {
-                              setSelectedInvoiceForAction(inv);
-                              setActionType("cancel");
-                              setActionReason("");
-                            }}
-                            className="px-2 py-1 rounded bg-rose-50 text-rose-700 hover:bg-rose-100 font-semibold text-[11px] inline-flex items-center gap-1"
-                          >
-                            <XCircle className="w-3 h-3" />
-                            <span>Hủy HĐ</span>
-                          </button>
-                        </>
-                      )}
+                      <button
+                        onClick={() => setPrintInvoice(inv)}
+                        className="px-2 py-1 rounded bg-sky-50 text-[#004885] hover:bg-sky-100 font-semibold text-[11px] inline-flex items-center gap-1"
+                      >
+                        <Eye className="w-3 h-3" />
+                        <span>Xem / In</span>
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -826,125 +812,11 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
         </div>
       )}
 
-      {/* Return / Cancel Dialog */}
-      {selectedInvoiceForAction && actionType && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl max-w-md w-full p-5 space-y-4 shadow-xl animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center gap-2 text-amber-700 font-bold text-sm">
-              <AlertTriangle className="w-5 h-5 text-amber-600" />
-              <span>
-                {actionType === "return"
-                  ? "Xử lý đổi trả hàng (Hóa đơn "
-                  : "Xác nhận hủy hóa đơn ("}
-                {selectedInvoiceForAction.code})
-              </span>
-            </div>
-
-            <p className="text-xs text-slate-600">
-              {actionType === "return"
-                ? "Sản phẩm đổi trả sẽ được hoàn lại vào kho hàng. Vui lòng ghi rõ lý do (VD: Khách đổi sang sữa ít đường, vỏ hộp móp méo...):"
-                : "Hóa đơn sẽ chuyển sang trạng thái ĐÃ HỦY và hoàn lại số lượng tồn kho của các mặt hàng. Thao tác này không thể hoàn tác."}
-            </p>
-
-            <textarea
-              rows={3}
-              value={actionReason}
-              onChange={(e) => setActionReason(e.target.value)}
-              placeholder="Nhập lý do đổi trả hoặc hủy hóa đơn..."
-              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-hidden focus:bg-white focus:ring-2 focus:ring-sky-500"
-            />
-
-            {/* Hoàn tiền cho khách (invoice_approvals.refundAmount / refundMethod / refundRef) */}
-            <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 space-y-2 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-slate-600">Số tiền hoàn lại:</span>
-                <span className="font-bold text-slate-900">
-                  {selectedInvoiceForAction.finalTotal.toLocaleString("vi-VN")}{" "}
-                  đ
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-slate-600">Hoàn bằng:</span>
-                <select
-                  value={refundMethod}
-                  onChange={(e) =>
-                    setRefundMethod(e.target.value as PaymentMethod)
-                  }
-                  className="px-2 py-1 bg-white border border-slate-300 rounded text-xs"
-                >
-                  <option value="cash">{PAYMENT_METHOD_LABELS.cash}</option>
-                  <option value="transfer">
-                    {PAYMENT_METHOD_LABELS.transfer}
-                  </option>
-                  <option value="card">{PAYMENT_METHOD_LABELS.card}</option>
-                </select>
-              </div>
-              {refundMethod === "transfer" && (
-                <input
-                  type="text"
-                  value={refundRef}
-                  onChange={(e) => setRefundRef(e.target.value)}
-                  placeholder="Mã giao dịch hoàn tiền..."
-                  className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs font-mono"
-                />
-              )}
-              {!isManager && (
-                <p className="text-[11px] text-amber-700">
-                  Bạn không có quyền duyệt. Thao tác cần Quản lý xác nhận
-                  (invoice:approve) trước khi hoàn tiền.
-                </p>
-              )}
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-              <button
-                onClick={() => {
-                  setSelectedInvoiceForAction(null);
-                  setActionType(null);
-                }}
-                className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg font-medium"
-              >
-                Hủy bỏ
-              </button>
-              <button
-                disabled={!isManager}
-                onClick={() => {
-                  const approval = {
-                    reason:
-                      actionReason ||
-                      (actionType === "return"
-                        ? "Khách đổi trả"
-                        : "Hủy hóa đơn sai sót"),
-                    refundAmount: selectedInvoiceForAction.finalTotal,
-                    refundMethod,
-                    refundRef:
-                      refundMethod === "transfer"
-                        ? refundRef.trim() || undefined
-                        : undefined,
-                    approvedById: currentStaff.id,
-                  };
-                  if (actionType === "return") {
-                    onReturnInvoice(selectedInvoiceForAction.id, approval);
-                  } else {
-                    onCancelInvoice(selectedInvoiceForAction.id, approval);
-                  }
-                  setSelectedInvoiceForAction(null);
-                  setActionType(null);
-                  setRefundMethod("cash");
-                  setRefundRef("");
-                }}
-                className={`px-4 py-1.5 text-xs font-bold text-white rounded-lg disabled:opacity-40 disabled:cursor-not-allowed ${
-                  actionType === "return"
-                    ? "bg-amber-600 hover:bg-amber-700"
-                    : "bg-rose-600 hover:bg-rose-700"
-                }`}
-              >
-                {actionType === "return" ? "Xác nhận đổi trả" : "Xác nhận hủy"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Vùng 8: Xem / in hóa đơn (UC10) */}
+      <InvoiceModal
+        invoice={printInvoice}
+        onClose={() => setPrintInvoice(null)}
+      />
     </div>
   );
 };

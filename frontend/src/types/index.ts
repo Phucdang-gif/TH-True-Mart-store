@@ -231,3 +231,33 @@ export interface StockAudit {
   status: StockAuditStatus;
   items: StockAuditItem[];
 }
+// Kết quả xem trước hóa đơn (POST /api/invoices/preview): server tính giá, chọn lô FIFO, áp khuyến mãi
+export interface InvoicePreviewLine {
+  productId: string;
+  productCode: string;
+  productName: string;
+  unit: string;
+  batchId: string;
+  batchCode: string;
+  expiryDate: string; // YYYY-MM-DD
+  quantity: number;
+  unitPrice: number;
+  discount: number; // giảm cấp dòng
+  subtotal: number;
+}
+
+export interface InvoicePreviewPromotion {
+  promotionId: string;
+  code: string;
+  name: string;
+  scope: PromotionScope;
+  discountAmount: number;
+}
+
+export interface InvoicePreview {
+  subtotal: number;
+  discountAmount: number;
+  finalTotal: number;
+  lines: InvoicePreviewLine[];
+  promotions: InvoicePreviewPromotion[];
+}

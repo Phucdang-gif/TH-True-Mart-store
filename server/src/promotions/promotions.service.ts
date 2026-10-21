@@ -50,6 +50,9 @@ export class PromotionsService {
     if (dto.discountType === 'percentage' && dto.value > 100) {
       throw new BadRequestException('Giảm theo % không được vượt quá 100');
     }
+    if (dto.discountType === 'fixed_amount' && dto.scope !== 'order') {
+      throw new BadRequestException('Giảm số tiền cố định chỉ áp dụng cho phạm vi "Toàn hóa đơn"');
+    }
     if (dto.discountType === 'fixed_amount' && dto.maxDiscountAmount != null) {
       throw new BadRequestException('Giảm tối đa chỉ áp dụng khi giảm theo %');
     }
