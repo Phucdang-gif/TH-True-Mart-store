@@ -2,7 +2,6 @@ import React, { useState, useEffect } from "react";
 import {
   Warehouse,
   AlertTriangle,
-  PlusCircle,
   ClipboardCheck,
   Search,
   CheckCircle2,
@@ -10,6 +9,8 @@ import {
   Inbox,
   Package,
   Calendar,
+  Filter,
+  Tag,
 } from "lucide-react";
 import {
   Product,
@@ -17,12 +18,12 @@ import {
   StockAudit,
   StockAuditItem,
   Staff,
-  PurchaseOrder,
 } from "../../types";
 import { useStockAudits } from "../../hooks/useStockAudits";
 import { useStockMovements } from "../../hooks/useStockMovements";
 import { useGoodsReceipts } from "../../hooks/useGoodsReceipts";
 import { usePurchaseOrders } from "../../hooks/usePurchaseOrders";
+import { useCategories } from "../../hooks/useCategories";
 interface QuanLyKhoProps {
   products: Product[];
   batches: Batch[]; // lô hàng dùng chung từ useBatches (App)
@@ -53,6 +54,8 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
     createMovement,
   } = useStockMovements();
   const { createReceipt } = useGoodsReceipts();
+  const { categories } = useCategories();
+  const [selectedCategory, setSelectedCategory] = useState<string>("all");
 
   const [auditSubmitting, setAuditSubmitting] = useState(false);
   const [detailAudit, setDetailAudit] = useState<StockAudit | null>(null);
@@ -138,6 +141,27 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
   const [receiptNotes, setReceiptNotes] = useState("");
   const [savingReceipt, setSavingReceipt] = useState(false);
 
+  // Helper lấy mã danh mục của lô hàng
+  const getBatchCategoryCode = (b: Batch) => {
+    if (b.categoryCode) return b.categoryCode;
+    const prod = products.find((p) => p.id === b.productId);
+    return prod?.category || "";
+  };
+
+  // Helper lấy tên hiển thị của ngành hàng
+  const getBatchCategoryName = (b: Batch) => {
+    if (b.categoryName) return b.categoryName;
+    const prod = products.find((p) => p.id === b.productId);
+    if (prod?.categoryName) return prod.categoryName;
+    const catCode = b.categoryCode || prod?.category;
+    if (catCode) {
+      const found = categories.find((c) => c.code === catCode);
+      if (found) return found.name;
+      return catCode;
+    }
+    return "Sản phẩm TH";
+  };
+
   // Tính số ngày còn lại của lô hàng
   const getDaysLeft = (expiryDateStr: string) => {
     const today = new Date();
@@ -146,18 +170,26 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
     return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   };
 
-  const expiringBatches = batches.filter(
+  const allExpiringBatches = batches.filter(
     (b) => getDaysLeft(b.expiryDate) <= 30 && b.quantity > 0,
   );
+  const expiringBatches = allExpiringBatches.filter((b) => {
+    if (selectedCategory === "all") return true;
+    return getBatchCategoryCode(b) === selectedCategory;
+  });
   const criticalExpiringBatches = batches.filter(
     (b) => getDaysLeft(b.expiryDate) <= 15 && b.quantity > 0,
   );
   const filteredBatches = batches.filter((b) => {
     const product = products.find((p) => p.id === b.productId);
-    return (
+    const matchesSearch =
       b.batchCode.toLowerCase().includes(search.toLowerCase()) ||
-      (product && product.name.toLowerCase().includes(search.toLowerCase()))
-    );
+      (product && product.name.toLowerCase().includes(search.toLowerCase())) ||
+      (b.productName && b.productName.toLowerCase().includes(search.toLowerCase()));
+    const matchesCategory =
+      selectedCategory === "all" ||
+      getBatchCategoryCode(b) === selectedCategory;
+    return matchesSearch && matchesCategory;
   });
 
   const auditStatusLabel: Record<string, string> = {
@@ -251,7 +283,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
   // === XỬ LÝ GỬI PHIẾU KIỂM KÊ ===
   const handleSubmitAuditForm = async () => {
     // 1. Kiểm tra xem các mặt hàng có chênh lệch đã được chọn lý do chưa
-    const items: StockAuditItem[] = batches.slice(0, 6).map((b) => {
+    const items: StockAuditItem[] = batches.map((b) => {
       const actual =
         auditItems[b.id] !== undefined ? auditItems[b.id] : b.quantity;
       const diff = actual - b.quantity;
@@ -473,15 +505,55 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
       {/* TAB: THẺ KHO */}
       {activeTab === "batches" && (
         <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-4 shadow-xs">
-          <div className="relative w-full sm:w-80">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Tìm theo số lô, tên sữa..."
-              className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-hidden focus:bg-white"
-            />
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="relative w-full sm:w-80">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Tìm theo số lô, tên sữa..."
+                  className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs outline-hidden focus:bg-white"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+                <Filter className="w-3.5 h-3.5 text-slate-500" />
+                <span className="text-xs text-slate-600 font-medium">Ngành hàng:</span>
+                <select
+                  value={selectedCategory}
+                  onChange={(e) => setSelectedCategory(e.target.value)}
+                  className="bg-transparent text-xs font-bold text-[#004885] outline-none cursor-pointer"
+                >
+                  <option value="all">Tất cả ngành hàng ({batches.length})</option>
+                  {categories.map((c) => {
+                    const count = batches.filter(
+                      (b) => getBatchCategoryCode(b) === c.code,
+                    ).length;
+                    return (
+                      <option key={c.id || c.code} value={c.code}>
+                        {c.name} ({count})
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+
+              {selectedCategory !== "all" && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedCategory("all")}
+                  className="text-xs text-slate-500 hover:text-slate-800 underline transition-colors"
+                >
+                  Xóa lọc ngành hàng
+                </button>
+              )}
+            </div>
+
+            <div className="text-xs text-slate-500 text-right">
+              Hiển thị <strong>{filteredBatches.length}</strong> / {batches.length} lô
+            </div>
           </div>
           <div className="overflow-x-auto">
             {isLoading ? (
@@ -494,6 +566,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                   <tr className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
                     <th className="py-2.5 px-3">Mã Lô Hàng</th>
                     <th className="py-2.5 px-3">Sản phẩm TH True Milk</th>
+                    <th className="py-2.5 px-3">Ngành hàng</th>
                     <th className="py-2.5 px-3">Ngày sản xuất (NSX)</th>
                     <th className="py-2.5 px-3">Hạn sử dụng (HSD)</th>
                     <th className="py-2.5 px-3 text-center">Số ngày còn</th>
@@ -517,7 +590,13 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                           {batch.batchCode}
                         </td>
                         <td className="py-2.5 px-3 font-semibold text-slate-900">
-                          {prod?.name || "Sản phẩm TH"}
+                          {prod?.name || batch.productName || "Sản phẩm TH"}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-sky-50 text-[#004885] border border-sky-100">
+                            <Tag className="w-3 h-3 text-sky-500" />
+                            {getBatchCategoryName(batch)}
+                          </span>
                         </td>
                         <td className="py-2.5 px-3 text-slate-600">
                           {formatDate(batch.manufacturingDate)}
@@ -569,16 +648,44 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
       {/* TAB: CẢNH BÁO */}
       {activeTab === "alerts" && (
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4 shadow-xs">
-          <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
             <div>
               <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 text-amber-500" />
                 <span>Danh sách lô hàng cận hạn sử dụng</span>
               </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Lọc theo từng ngành hàng để ưu tiên xuất bán theo FIFO hoặc áp dụng khuyến mãi
+              </p>
             </div>
-            <span className="bg-amber-100 text-amber-800 text-xs font-bold px-3 py-1 rounded-full">
-              {expiringBatches.length} lô cần xử lý
-            </span>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+                <Filter className="w-3.5 h-3.5 text-slate-500" />
+                <span className="text-xs text-slate-600 font-medium">Ngành hàng:</span>
+                <select
+                  value={selectedCategory}
+                  onChange={(e) => setSelectedCategory(e.target.value)}
+                  className="bg-transparent text-xs font-bold text-[#004885] outline-none cursor-pointer"
+                >
+                  <option value="all">
+                    Tất cả ngành hàng ({allExpiringBatches.length})
+                  </option>
+                  {categories.map((c) => {
+                    const count = allExpiringBatches.filter(
+                      (b) => getBatchCategoryCode(b) === c.code,
+                    ).length;
+                    return (
+                      <option key={c.id || c.code} value={c.code}>
+                        {c.name} ({count})
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+              <span className="bg-amber-100 text-amber-800 text-xs font-bold px-3 py-1.5 rounded-lg">
+                {expiringBatches.length} lô cần xử lý
+              </span>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse">
@@ -586,6 +693,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                 <tr className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
                   <th className="py-2.5 px-3">Mã Lô</th>
                   <th className="py-2.5 px-3">Tên sản phẩm</th>
+                  <th className="py-2.5 px-3">Ngành hàng</th>
                   <th className="py-2.5 px-3">Hạn sử dụng</th>
                   <th className="py-2.5 px-3 text-center">Thời gian còn lại</th>
                   <th className="py-2.5 px-3 text-right">Số lượng tồn</th>
@@ -601,7 +709,13 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                         {b.batchCode}
                       </td>
                       <td className="py-2.5 px-3 font-semibold text-slate-900">
-                        {prod?.name}
+                        {prod?.name || b.productName}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-sky-50 text-[#004885] border border-sky-100">
+                          <Tag className="w-3 h-3 text-sky-500" />
+                          {getBatchCategoryName(b)}
+                        </span>
                       </td>
                       <td className="py-2.5 px-3 font-bold text-rose-700">
                         {formatDate(b.expiryDate)}
@@ -652,6 +766,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                 <tr className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
                   <th className="py-2.5 px-3">Mã Lô</th>
                   <th className="py-2.5 px-3">Sản phẩm TH</th>
+                  <th className="py-2.5 px-3">Ngành hàng</th>
                   <th className="py-2.5 px-3 text-right">SL Hệ thống</th>
                   <th className="py-2.5 px-3 text-right">
                     SL Thực tế đếm được
@@ -663,7 +778,7 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {batches.slice(0, 6).map((b) => {
+                {batches.map((b) => {
                   const prod = products.find((p) => p.id === b.productId);
                   const actualCount =
                     auditItems[b.id] !== undefined
@@ -680,7 +795,12 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                         {b.batchCode}
                       </td>
                       <td className="py-2.5 px-3 font-semibold text-slate-900">
-                        {prod?.name}
+                        {prod?.name || b.productName}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-700">
+                          {getBatchCategoryName(b)}
+                        </span>
                       </td>
                       <td className="py-2.5 px-3 text-right font-medium text-slate-600">
                         {b.quantity}
@@ -915,7 +1035,11 @@ export const QuanLyKho: React.FC<QuanLyKhoProps> = ({
                       </span>
                     </h3>
                     <p className="text-xs text-slate-500 mt-1">
-                      {prod?.name || "Sản phẩm"} • Tồn hiện tại:{" "}
+                      {prod?.name || moveBatch.productName || "Sản phẩm"} • Ngành:{" "}
+                      <strong className="text-[#004885]">
+                        {getBatchCategoryName(moveBatch)}
+                      </strong>{" "}
+                      • Tồn hiện tại:{" "}
                       <strong className="text-slate-800">
                         {moveBatch.quantity} {prod?.unit}
                       </strong>

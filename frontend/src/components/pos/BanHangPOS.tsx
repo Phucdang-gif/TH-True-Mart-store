@@ -9,16 +9,17 @@ import {
   Tag,
   Eye,
   CreditCard,
+  Package,
 } from "lucide-react";
 import { Product, Batch, Invoice, InvoicePreview } from "../../types";
 import type { CreateInvoiceInput, PreviewInvoiceInput } from "../../types/api";
 import {
-  CATEGORY_LABELS,
-  CATEGORY_LIST,
   INVOICE_STATUS_LABELS,
   PAYMENT_METHOD_LABELS,
 } from "../../lib/labels";
+import { useCategories } from "../../hooks/useCategories";
 import { InvoiceModal } from "../InvoiceModal";
+import { assetUrl } from "../../lib/api";
 
 interface BanHangPOSProps {
   products: Product[];
@@ -72,13 +73,15 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
   // Hóa đơn đang xem / in (sau khi thanh toán hoặc bấm "Xem" ở lịch sử)
   const [printInvoice, setPrintInvoice] = useState<Invoice | null>(null);
 
-  // Categories list (mã enum của DB)
-  const categories: string[] = ["all", ...CATEGORY_LIST];
+  // Categories list tải trực tiếp từ database qua API
+  const { categories } = useCategories();
 
-  // Filter products
+  // Filter products theo ngành hàng từ CSDL
   const filteredProducts = products.filter((p) => {
     const matchesCat =
-      selectedCategory === "all" || p.category === selectedCategory;
+      selectedCategory === "all" ||
+      p.category === selectedCategory ||
+      p.categoryId === selectedCategory;
     const matchesSearch =
       p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       p.code.toLowerCase().includes(searchQuery.toLowerCase());
@@ -110,10 +113,22 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
 
   // Add to cart
   const addToCart = (product: Product) => {
-    const inCart = cart.find((i) => i.product.id === product.id)?.quantity ?? 0;
     const available = availableQty(product.id);
+    if (available <= 0) {
+      const pBatches = batches.filter((b) => b.productId === product.id);
+      if (pBatches.length === 0) {
+        alert(`Sản phẩm "${product.name}" chưa có lô hàng nào trong kho. Vui lòng kiểm đếm & nhập kho trước khi bán.`);
+      } else if (pBatches.some((b) => b.quantity > 0 && new Date(b.expiryDate) < new Date())) {
+        alert(`Sản phẩm "${product.name}" trong kho đã quá hạn sử dụng. Theo quy chuẩn an toàn thực phẩm TH True Milk, hàng hết date không được phép bán.`);
+      } else {
+        alert(`Sản phẩm "${product.name}" hiện đã hết hàng trong kho (số lượng tồn: 0).`);
+      }
+      return;
+    }
+
+    const inCart = cart.find((i) => i.product.id === product.id)?.quantity ?? 0;
     if (inCart + 1 > available) {
-      alert(`Sản phẩm "${product.name}" chỉ còn ${available} trong kho.`);
+      alert(`Sản phẩm "${product.name}" chỉ còn ${available} ${product.unit} đủ điều kiện bán trong kho.`);
       return;
     }
     setCart((prev) =>
@@ -368,23 +383,38 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                 </div>
               </div>
 
-              {/* Category Pills */}
+              {/* Category Pills: Đồng bộ động từ API categories */}
               <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none">
-                {categories.map((cat) => (
-                  <button
-                    key={cat}
-                    onClick={() => setSelectedCategory(cat)}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium whitespace-nowrap transition-all ${
-                      selectedCategory === cat
-                        ? "bg-sky-600 text-white shadow-xs"
-                        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                    }`}
-                  >
-                    {cat === "all"
-                      ? "Tất cả sản phẩm TH"
-                      : CATEGORY_LABELS[cat as keyof typeof CATEGORY_LABELS]}
-                  </button>
-                ))}
+                <button
+                  type="button"
+                  onClick={() => setSelectedCategory("all")}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium whitespace-nowrap transition-all cursor-pointer ${
+                    selectedCategory === "all"
+                      ? "bg-[#004885] text-white shadow-xs"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  Tất cả ({products.length})
+                </button>
+                {categories.map((cat) => {
+                  const count = products.filter(
+                    (p) => p.category === cat.code || p.categoryId === cat.id,
+                  ).length;
+                  return (
+                    <button
+                      key={cat.id || cat.code}
+                      type="button"
+                      onClick={() => setSelectedCategory(cat.code)}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-medium whitespace-nowrap transition-all cursor-pointer ${
+                        selectedCategory === cat.code
+                          ? "bg-[#004885] text-white shadow-xs"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      }`}
+                    >
+                      {cat.name} ({count})
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -395,61 +425,134 @@ export const BanHangPOS: React.FC<BanHangPOSProps> = ({
                 const isExpiringSoon =
                   availableBatch?.status === "expiring_soon";
 
+                // Phân loại nguyên nhân chi tiết khi không thể bán
+                const pBatches = batches.filter((b) => b.productId === product.id);
+                const now = new Date();
+                const hasExpiredBatches = pBatches.some(
+                  (b) => b.quantity > 0 && new Date(b.expiryDate) < now,
+                );
+                const isZeroStock = pBatches.length > 0 && pBatches.every((b) => b.quantity <= 0);
+                const isNoBatch = pBatches.length === 0;
+
                 return (
                   <div
                     key={product.id}
                     id={`product-card-${product.id}`}
                     onClick={() => addToCart(product)}
-                    className="bg-white border border-slate-200 hover:border-sky-500 hover:shadow-md rounded-xl p-3.5 flex flex-col justify-between cursor-pointer transition-all group relative overflow-hidden"
+                    className={`border rounded-2xl flex flex-col justify-between cursor-pointer transition-all group relative overflow-hidden shadow-xs hover:shadow-md ${
+                      availableBatch
+                        ? "bg-white border-slate-200 hover:border-[#004885]"
+                        : "bg-slate-50/70 border-slate-200 opacity-80"
+                    }`}
                   >
-                    {/* Vùng 2: đã xóa huy hiệu discountPercent */}
+                    {/* Top Hero Image Container (Cao 128px, bao bì nổi bật) */}
+                    <div className="relative w-full h-32 bg-slate-50/70 p-2 flex items-center justify-center border-b border-slate-100 overflow-hidden">
+                      {product.imageUrl ? (
+                        <img
+                          src={assetUrl(product.imageUrl)}
+                          alt={product.name}
+                          className="w-full h-full object-contain group-hover:scale-110 transition-transform duration-300"
+                          onError={(e) => {
+                            const target = e.currentTarget;
+                            const cleanPath = product.imageUrl?.startsWith('/') ? product.imageUrl : `/${product.imageUrl}`;
+                            if (target.src.includes(':3001')) {
+                              target.src = cleanPath;
+                            } else {
+                              target.style.display = 'none';
+                              const fallback = target.nextElementSibling;
+                              if (fallback) fallback.style.display = 'flex';
+                            }
+                          }}
+                        />
+                      ) : null}
+                      <div
+                        className="w-full h-full flex flex-col items-center justify-center text-slate-300"
+                        style={{ display: product.imageUrl ? 'none' : 'flex' }}
+                      >
+                        <Package className="w-8 h-8 mb-1 text-slate-300" />
+                        <span className="text-[10px] font-medium text-slate-400">TH True Mart</span>
+                      </div>
 
-                    <div className="space-y-1.5">
-                      <span className="text-[10px] font-semibold text-[#004885] bg-sky-50 px-2 py-0.5 rounded inline-block">
+                      {/* Mã sản phẩm Badge */}
+                      <span className="absolute top-2 left-2 text-[10px] font-bold text-[#004885] bg-white/95 backdrop-blur-xs border border-sky-100 px-1.5 py-0.5 rounded-md shadow-xs font-mono">
                         {product.code}
                       </span>
-                      <h4 className="text-xs font-bold text-slate-800 line-clamp-2 group-hover:text-[#004885] transition-colors">
-                        {product.name}
-                      </h4>
-                      <p className="text-[11px] text-slate-500">
-                        ĐVT: {product.unit}
-                      </p>
+
+                      {/* Cận Date Badge */}
+                      {isExpiringSoon && (
+                        <span className="absolute top-2 right-2 text-[9px] font-bold text-amber-700 bg-amber-100/95 border border-amber-200 px-1.5 py-0.5 rounded-md shadow-xs animate-pulse">
+                          Cận Date
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Card Body */}
+                    <div className="p-3 flex flex-col justify-between flex-1 space-y-2">
+                      <div className="space-y-1">
+                        <h4 className="text-xs font-bold text-slate-800 line-clamp-2 group-hover:text-[#004885] transition-colors leading-snug min-h-[32px]">
+                          {product.name}
+                        </h4>
+                        <p className="text-[11px] text-slate-500 font-medium">
+                          ĐVT: {product.unit}
+                        </p>
+                      </div>
 
                       {/* Batch & Expiry Tag (Lô & Date) */}
                       {availableBatch ? (
                         <div
-                          className={`text-[10px] px-2 py-1 rounded flex items-center justify-between ${
+                          className={`text-[10px] px-2 py-1 rounded-md flex items-center justify-between ${
                             isExpiringSoon
                               ? "bg-amber-50 text-amber-800 border border-amber-200"
-                              : "bg-slate-50 text-slate-600"
+                              : "bg-slate-100/80 text-slate-600 border border-slate-200/60"
                           }`}
                         >
-                          <span className="truncate">
-                            Lô: {availableBatch.batchCode}
+                          <span className="truncate font-mono font-medium">
+                            {availableBatch.batchCode}
                           </span>
-                          <span className="font-semibold">
-                            {availableBatch.expiryDate.slice(5)}
+                          <span className="font-semibold text-[10px]">
+                            HSD: {availableBatch.expiryDate.slice(5, 10)}
                           </span>
+                        </div>
+                      ) : hasExpiredBatches ? (
+                        <div className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 px-2 py-1 rounded-md font-medium flex items-center justify-between">
+                          <span>Hết HSD</span>
+                          <span className="text-[9px] text-amber-600 font-bold">Chặn bán</span>
+                        </div>
+                      ) : isZeroStock ? (
+                        <div className="text-[10px] text-rose-700 bg-rose-50 border border-rose-200 px-2 py-1 rounded-md font-medium flex items-center justify-between">
+                          <span>Hết tồn kho</span>
+                          <span className="text-[9px] text-rose-500 font-bold">SL: 0</span>
+                        </div>
+                      ) : isNoBatch ? (
+                        <div className="text-[10px] text-slate-600 bg-slate-100 border border-slate-200 px-2 py-1 rounded-md font-medium flex items-center justify-between">
+                          <span>Chưa có lô</span>
+                          <span className="text-[9px] text-slate-400 font-bold">Chờ nhập</span>
                         </div>
                       ) : (
-                        <div className="text-[10px] text-rose-600 bg-rose-50 px-2 py-0.5 rounded">
-                          Hết hàng trong kho
+                        <div className="text-[10px] text-rose-600 bg-rose-50 px-2 py-1 rounded-md">
+                          Tạm ngưng bán
                         </div>
                       )}
-                    </div>
 
-                    <div className="pt-3 mt-2 border-t border-slate-100 flex items-center justify-between">
-                      <div>
-                        <span className="text-xs font-extrabold text-[#004885]">
-                          {product.sellingPrice.toLocaleString("vi-VN")} đ
-                        </span>
+                      {/* Price & Add button */}
+                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                        <div>
+                          <span className="text-sm font-black text-[#004885]">
+                            {product.sellingPrice.toLocaleString("vi-VN")} đ
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all ${
+                            availableBatch
+                              ? "bg-sky-50 group-hover:bg-[#004885] text-[#004885] group-hover:text-white shadow-xs"
+                              : "bg-slate-100 text-slate-400 cursor-not-allowed"
+                          }`}
+                          title={availableBatch ? "Thêm vào giỏ" : "Không thể bán"}
+                        >
+                          <Plus className="w-4 h-4" />
+                        </button>
                       </div>
-                      <button
-                        className="w-7 h-7 rounded-lg bg-sky-50 group-hover:bg-[#004885] text-[#004885] group-hover:text-white flex items-center justify-center transition-colors"
-                        title="Thêm vào giỏ"
-                      >
-                        <Plus className="w-4 h-4" />
-                      </button>
                     </div>
                   </div>
                 );

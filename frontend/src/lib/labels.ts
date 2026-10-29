@@ -1,27 +1,11 @@
-// Ánh xạ giá trị ENUM của database (init.sql) <-> nhãn tiếng Việt hiển thị trên giao diện.
-// Database luôn lưu/nhận MÃ ENUM; giao diện chỉ dùng nhãn khi hiển thị.
 import type {
-  Category, Shift, StaffRole, PaymentMethod, InvoiceStatus,
-  PromotionStatus, PromotionScope, PurchaseOrderStatus,
+  StaffRole,
+  PaymentMethod,
+  InvoiceStatus,
+  PromotionStatus,
+  PromotionScope,
+  PurchaseOrderStatus,
 } from '../types';
-
-export const CATEGORY_LABELS: Record<Category, string> = {
-  SUA_TUOI_TIET_TRUNG: 'Sữa tươi tiệt trùng',
-  SUA_TUOI_THANH_TRUNG: 'Sữa tươi thanh trùng',
-  SUA_CHUA: 'Sữa chua ăn & uống',
-  BO_PHOMAI: 'Bơ & Phô mai tự nhiên',
-  KEM: 'Kem TH true ICE CREAM',
-  NUOC: 'Nước tinh khiết & Nước trái cây',
-  TRA: 'Trà tự nhiên TH true TEA',
-};
-export const CATEGORY_LIST = Object.keys(CATEGORY_LABELS) as Category[];
-
-export const SHIFT_LABELS: Record<Shift, string> = {
-  SANG: 'Sáng (06:00 - 14:00)',
-  CHIEU: 'Chiều (14:00 - 22:00)',
-  HANH_CHINH: 'Hành chính',
-};
-export const SHIFT_LIST = Object.keys(SHIFT_LABELS) as Shift[];
 
 export const ROLE_LABELS: Record<StaffRole, string> = {
   manager: 'Quản lý',

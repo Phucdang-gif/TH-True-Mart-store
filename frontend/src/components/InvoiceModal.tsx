@@ -1,5 +1,5 @@
 import React from 'react';
-import { Printer, X, CheckCircle, Milk, QrCode } from 'lucide-react';
+import { Printer, X, CheckCircle, Milk } from 'lucide-react';
 import { Invoice } from '../types';
 import { PAYMENT_METHOD_LABELS } from '../lib/labels';
 

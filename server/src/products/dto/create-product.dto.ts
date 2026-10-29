@@ -10,9 +10,13 @@ export class CreateProductDto {
   @IsNotEmpty()
   name: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  categoryId: string;
+  categoryId?: string;
+
+  @IsOptional()
+  @IsString()
+  category?: string;
 
   @IsString()
   @IsNotEmpty()
@@ -38,4 +42,8 @@ export class CreateProductDto {
   @IsOptional()
   @IsEnum(ProductStatus)
   status?: ProductStatus;
+
+  @IsOptional()
+  @IsString()
+  imageUrl?: string;
 }

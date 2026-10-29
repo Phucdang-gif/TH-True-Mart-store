@@ -6,7 +6,7 @@ import { QuanLyKho } from "./components/inventory/QuanLyKho";
 import { QuanLyNhanVien } from "./components/staff/QuanLyNhanVien";
 import { QuanLyNhaCungCap } from "./components/suppliers/QuanLyNhaCungCap";
 import { BaoCaoThongKe } from "./components/reports/BaoCaoThongKe";
-import { INITIAL_STAFF } from "./data/initialData";
+import { LoginModal } from "./components/auth/LoginModal";
 import { Staff } from "./types";
 import type { CreateInvoiceInput } from "./types/api";
 import { useProducts } from "./hooks/useProducts";
@@ -15,20 +15,35 @@ import { usePromotions } from "./hooks/usePromotions";
 import { useInvoices } from "./hooks/useInvoices";
 import { canAccessModule } from "./lib/permissions";
 import { useRoleGroups } from "./hooks/useRoleGroups";
+import { useStaff } from "./hooks/useStaff";
+import { authService, AuthStaff } from "./services/auth";
 
 export default function App() {
   const [activeModule, setActiveModule] = useState<number>(1); // 1 to 6
+  const [showLoginModal, setShowLoginModal] = useState<boolean>(false);
+
+  // Quản lý phiên làm việc & tài khoản đăng nhập thời gian thực (UC23, UC24)
+  const [currentUser, setCurrentUser] = useState<AuthStaff | null>(() => {
+    return authService.getCurrentUser();
+  });
+
+  const [userPermissions, setUserPermissions] = useState<string[] | null>(() => {
+    return authService.getSavedPermissions();
+  });
 
   // ===== Dữ liệu đã nối API: state + gọi API nằm trong hook =====
-  const { products, addProduct, updateProductPrice } = useProducts();
-
-  // Lô hàng lấy từ DB, dùng chung cho Navbar, Kho, POS, Báo cáo
+  const { products, addProduct, updateProduct, updateProductPrice } = useProducts();
   const { batches, reload: reloadBatches } = useBatches();
-
-  // ===== Dữ liệu tạm (dữ liệu giả, sẽ nối API ở các module sau) =====
-  const [staffList, setStaffList] = useState<Staff[]>(INITIAL_STAFF);
   const { roles, permissions, error: roleLoadError, reload: reloadRoles } = useRoleGroups();
-  // Khuyến mãi lấy từ DB (/api/promotions)
+  const {
+    staffList,
+    loginLogs,
+    isLoading: isStaffLoading,
+    addStaff,
+    toggleLock,
+    reloadStaff,
+  } = useStaff();
+
   const {
     promotions,
     createPromotion,
@@ -37,23 +52,61 @@ export default function App() {
   } = usePromotions();
   const { invoices, previewInvoice, createInvoice } = useInvoices();
 
-  // Nhân viên đang thao tác. TODO: thay bằng tài khoản đăng nhập (auth_sessions) khi có màn hình đăng nhập.
-  const currentStaff: Staff =
-    staffList.find((s) => s.role === "manager" && s.status === "active") ||
-    staffList[0];
+  const handleLoginSuccess = (staff: AuthStaff, perms: string[]) => {
+    setCurrentUser(staff);
+    setUserPermissions(perms);
+    setShowLoginModal(false);
+    const allowed = [1, 2, 3, 4, 5, 6].find((m) => canAccessModule(perms, m)) ?? 1;
+    setActiveModule(allowed);
+  };
 
-  // Không chỉ ẩn link: mọi đường dẫn đổi module cũng phải qua kiểm tra quyền.
-  const rolePermissions = roles === null
+  const handleLogout = async () => {
+    await authService.logout();
+    setCurrentUser(null);
+    setUserPermissions(null);
+    setShowLoginModal(false);
+  };
+
+  // Nếu chưa đăng nhập, bắt buộc phải đăng nhập (không fix cứng tài khoản)
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-[#002a50] via-[#004885] to-slate-900 flex flex-col justify-center items-center p-4">
+        <LoginModal
+          isOpen={true}
+          isDismissible={false}
+          onClose={() => {}}
+          onLoginSuccess={handleLoginSuccess}
+        />
+      </div>
+    );
+  }
+
+  const currentStaff: Staff = {
+    id: currentUser.id,
+    code: currentUser.code,
+    name: currentUser.name,
+    phone: currentUser.phone || "",
+    username: currentUser.username,
+    role: (currentUser.role as any) || "manager",
+    status: "active",
+    shift: "HANH_CHINH",
+  };
+
+  // Xác định quyền hạn theo role hiện tại của nhân viên đã đăng nhập
+  const rolePermissions = userPermissions ?? (roles === null
     ? null
     : roles.find((role) => role.code === currentStaff.role)?.role_permissions.map(
         (link) => link.permissions.code,
-      ) ?? [];
+      ) ?? []);
+
   const firstAllowedModule = [1, 2, 3, 4, 5, 6].find((moduleId) =>
     canAccessModule(rolePermissions, moduleId),
   );
+
   const visibleActiveModule = canAccessModule(rolePermissions, activeModule)
     ? activeModule
-    : firstAllowedModule ?? 0;
+    : firstAllowedModule ?? 1;
+
   const handleSetActiveModule = (moduleId: number) => {
     if (canAccessModule(rolePermissions, moduleId)) {
       setActiveModule(moduleId);
@@ -79,19 +132,6 @@ export default function App() {
     return invoice;
   };
 
-  // Kiểm kê: đã chuyển sang gọi API trực tiếp trong QuanLyKho (/api/stock-audits)
-
-  // 4. Staff handlers
-  const handleAddStaff = (newStaff: Staff) => {
-    setStaffList((prev) => [...prev, newStaff]);
-  };
-
-  const handleUpdateShift = (staffId: string, newShift: Staff["shift"]) => {
-    setStaffList((prev) =>
-      prev.map((s) => (s.id === staffId ? { ...s, shift: newShift } : s)),
-    );
-  };
-
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800">
       {/* Top Main Navigation Bar with 6 modules */}
@@ -100,6 +140,9 @@ export default function App() {
         setActiveModule={handleSetActiveModule}
         expiringCount={expiringCount}
         permissionCodes={rolePermissions}
+        currentStaff={currentUser}
+        onOpenLogin={() => setShowLoginModal(true)}
+        onLogout={handleLogout}
       />
 
       {/* Main Container */}
@@ -119,6 +162,7 @@ export default function App() {
             <QuanLyHangHoa
               products={products}
               promotions={promotions}
+              onUpdateProduct={updateProduct}
               onUpdateProductPrice={updateProductPrice}
               onAddProduct={addProduct}
               onCreatePromotion={createPromotion}
@@ -138,12 +182,15 @@ export default function App() {
           {visibleActiveModule === 4 && (
             <QuanLyNhanVien
               staffList={staffList}
-              onAddStaff={handleAddStaff}
-              onUpdateShift={handleUpdateShift}
+              loginLogs={loginLogs}
+              isLoading={isStaffLoading}
+              onAddStaff={addStaff}
+              onToggleLock={toggleLock}
               roles={roles}
               permissions={permissions}
               roleLoadError={roleLoadError}
               reloadRoles={reloadRoles}
+              reloadStaff={reloadStaff}
             />
           )}
 
@@ -154,10 +201,19 @@ export default function App() {
               invoices={invoices}
               products={products}
               batches={batches}
+              promotions={promotions}
             />
           )}
         </div>
       </main>
+
+      {/* Modal Đăng nhập / Chuyển đổi vai trò khi đang trong phiên */}
+      <LoginModal
+        isOpen={showLoginModal}
+        isDismissible={true}
+        onClose={() => setShowLoginModal(false)}
+        onLoginSuccess={handleLoginSuccess}
+      />
     </div>
   );
 }

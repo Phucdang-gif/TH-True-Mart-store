@@ -2,13 +2,16 @@ import { fetchApi } from "../lib/api";
 import { toNum } from "../lib/labels";
 import { Product } from "../types";
 
-// Dữ liệu gửi lên khi tạo sản phẩm (id, ảnh do server quản lý) - khớp CreateProductDto
-export type ProductInput = Omit<Product, "id" | "imageUrl">;
+// Dữ liệu gửi lên khi tạo / cập nhật sản phẩm - khớp CreateProductDto / UpdateProductDto
+export type ProductInput = Omit<Product, "id">;
 
 // Prisma trả DECIMAL dạng chuỗi ("38000.00") -> ép về số.
 // Dùng chung cho list / create / update để mọi nơi nhận Product đều có giá là số.
 const normalize = (p: any): Product => ({
   ...p,
+  categoryId: p.categoryId || p.product_categories?.id,
+  category: p.product_categories?.code || p.category || "",
+  categoryName: p.product_categories?.name,
   sellingPrice: toNum(p.sellingPrice),
   costPrice: toNum(p.costPrice),
   discountPercent:

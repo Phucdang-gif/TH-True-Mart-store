@@ -18,6 +18,13 @@ export function useProducts() {
   const addProduct = async (data: ProductInput) => {
     const created = await productsApi.create(data);
     setProducts((prev) => [...prev, created]);
+    return created;
+  };
+
+  const updateProduct = async (id: string, data: Partial<ProductInput>) => {
+    const updated = await productsApi.update(id, data);
+    setProducts((prev) => prev.map((p) => (p.id === id ? updated : p)));
+    return updated;
   };
 
   const updateProductPrice = async (
@@ -25,9 +32,8 @@ export function useProducts() {
     sellingPrice: number,
     costPrice: number,
   ) => {
-    const updated = await productsApi.update(id, { sellingPrice, costPrice });
-    setProducts((prev) => prev.map((p) => (p.id === id ? updated : p)));
+    return updateProduct(id, { sellingPrice, costPrice });
   };
 
-  return { products, loading, error, addProduct, updateProductPrice };
+  return { products, loading, error, addProduct, updateProduct, updateProductPrice };
 }

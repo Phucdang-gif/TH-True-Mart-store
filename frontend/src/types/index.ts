@@ -1,18 +1,13 @@
-// Kiểu dữ liệu khớp với database (schema.prisma). Giá trị ENUM dùng đúng mã trong DB;
-// nhãn tiếng Việt nằm ở src/lib/labels.ts.
+// Kiểu dữ liệu TypeScript cho toàn bộ Frontend TH True Mart.
+// - Các ENUM CỐ ĐỊNH (InvoiceStatus, PaymentMethod, StaffRole...) được ánh xạ sang nhãn tiếng Việt ở src/lib/labels.ts.
+// - Các thực thể CSDL ĐỘNG (như Danh mục sản phẩm Category) được quản lý qua API /api/categories, không fix cứng.
 //
 // Lưu ý khi nối API (JSON từ backend):
-//  - Cột DECIMAL (giá, tiền...) về dạng CHUỖI ("38000.00") -> phải ép số trong services/ (xem toNum).
+//  - Cột DECIMAL (giá, tiền...) về dạng CHUỖI ("38000.00") -> ép số qua toNum() trong services/.
 //  - Cột DateTime về dạng ISO ("2026-10-01T00:00:00.000Z") -> lấy slice(0, 10) khi cần "YYYY-MM-DD".
 
-export type Category =
-  | 'SUA_TUOI_TIET_TRUNG'
-  | 'SUA_TUOI_THANH_TRUNG'
-  | 'SUA_CHUA'
-  | 'BO_PHOMAI'
-  | 'KEM'
-  | 'NUOC'
-  | 'TRA';
+// Category: Mã danh mục là chuỗi động (khớp với bảng `Category.code` trong CSDL qua API /api/categories)
+export type Category = string;
 
 export type ProductStatus = 'active' | 'discontinued';
 export type BatchStatus = 'good' | 'expiring_soon' | 'expired';
@@ -20,10 +15,8 @@ export type BatchStatus = 'good' | 'expiring_soon' | 'expired';
 export type PaymentMethod = 'cash' | 'transfer' | 'card' | 'mixed';
 export type PaymentStatus = 'pending' | 'confirmed' | 'failed';
 export type InvoiceStatus = 'completed' | 'pending_payment' | 'returned' | 'cancelled' | 'pending_approval';
-export type CashSessionStatus = 'open' | 'closed' | 'reviewed';
 export type StaffRole = 'manager' | 'cashier' | 'warehouse';
 export type StaffStatus = 'active' | 'inactive';
-export type Shift = 'SANG' | 'CHIEU' | 'HANH_CHINH';
 export type DiscountType = 'percentage' | 'fixed_amount';
 export type PromotionStatus = 'draft' | 'scheduled' | 'active' | 'paused' | 'expired';
 export type PromotionScope = 'order' | 'category' | 'product' | 'near_expiry';
@@ -35,6 +28,9 @@ export interface Batch {
   id: string;
   batchCode: string; // e.g. LOTH2026-09A (cột batchCode, unique)
   productId: string;
+  productName?: string;
+  categoryCode?: string;
+  categoryName?: string;
   manufacturingDate: string; // YYYY-MM-DD (API trả ISO)
   expiryDate: string; // YYYY-MM-DD (API trả ISO)
   quantity: number;
@@ -47,7 +43,9 @@ export interface Product {
   id: string;
   code: string; // e.g. TH001
   name: string;
+  categoryId?: string;
   category: Category;
+  categoryName?: string;
   unit: string; // Hộp 180ml, Thùng 48 hộp, Vỉ 4 hộp, Hũ 100g, Cây kem 70g, Chai 350ml
   sellingPrice: number;
   costPrice: number;
@@ -109,7 +107,6 @@ export interface Invoice {
   createdAt: string;
   cashierId: string;
   cashierName: string;
-  cashSessionId?: string;
   items: InvoiceItem[];
   subtotal: number;
   discountAmount: number;
@@ -125,22 +122,6 @@ export interface Invoice {
   approvals?: InvoiceApproval[];
 }
 
-// Bảng cash_sessions: ca thu ngân
-export interface CashSession {
-  id: string;
-  code: string;
-  cashierId: string;
-  openedAt: string;
-  openingCash: number;
-  closedAt?: string;
-  expectedCash?: number; // openingCash + tiền mặt thu - tiền mặt hoàn
-  countedCash?: number;
-  difference?: number; // countedCash - expectedCash
-  differenceReason?: string;
-  reviewedById?: string;
-  status: CashSessionStatus;
-}
-
 export interface Staff {
   id: string;
   code: string; // e.g. NV001
@@ -150,7 +131,6 @@ export interface Staff {
   password?: string; // chỉ dùng lúc tạo mới để gửi lên API (server băm bcrypt), không lưu lại ở client
   role: StaffRole;
   status: StaffStatus;
-  shift: Shift;
   mustChangePassword?: boolean;
 }
 

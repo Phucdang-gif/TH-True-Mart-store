@@ -88,10 +88,16 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
 
   const [newSup, setNewSup] = useState(EMPTY_SUPPLIER);
 
+  const getExpectedDeliveryDate = () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 3);
+    return d.toISOString().split("T")[0];
+  };
+
   // New Purchase Order State
   const defaultProductId = products[0]?.id || "";
   const [selectedSupplierId, setSelectedSupplierId] = useState<string>("");
-  const [expectedDate, setExpectedDate] = useState("2026-09-25");
+  const [expectedDate, setExpectedDate] = useState(getExpectedDeliveryDate);
   const [poItems, setPoItems] = useState<
     { productId: string; quantity: number }[]
   >([{ productId: defaultProductId, quantity: 50 }]);
@@ -117,6 +123,7 @@ export const QuanLyNhaCungCap: React.FC<QuanLyNhaCungCapProps> = ({
   };
   const openOrderModal = () => {
     setError(null);
+    setExpectedDate(getExpectedDeliveryDate());
     setPoItems([{ productId: defaultProductId, quantity: 50 }]);
     setShowCreateOrderModal(true);
   };

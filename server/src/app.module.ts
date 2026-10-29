@@ -13,9 +13,26 @@ import { StockAuditsModule } from './stock-audits/stock-audits.module';
 import { PromotionsModule } from './promotions/promotions.module';
 import { InvoicesModule } from './invoices/invoices.module';
 import { RolesModule } from './roles/roles.module';
+import { AuthModule } from './auth/auth.module';
+import { StaffModule } from './staff/staff.module';
 
 @Module({
-  imports: [PrismaModule, ProductsModule, SuppliersModule, PurchaseOrdersModule, BatchesModule, CategoriesModule, StockMovementsModule, GoodsReceiptsModule, StockAuditsModule, PromotionsModule, InvoicesModule, RolesModule],
+  imports: [
+    PrismaModule,
+    AuthModule,
+    StaffModule,
+    ProductsModule,
+    SuppliersModule,
+    PurchaseOrdersModule,
+    BatchesModule,
+    CategoriesModule,
+    StockMovementsModule,
+    GoodsReceiptsModule,
+    StockAuditsModule,
+    PromotionsModule,
+    InvoicesModule,
+    RolesModule,
+  ],
   controllers: [AppController],
   providers: [AppService],
 })

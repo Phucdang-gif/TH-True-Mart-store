@@ -6,10 +6,14 @@ import {
   Layers,
   Plus,
   Edit2,
+  Edit,
   Check,
   X,
   Search,
   Calendar,
+  Trash2,
+  RefreshCw,
+  AlertCircle,
 } from "lucide-react";
 import { Product, Promotion, Category, PromotionScope } from "../../types";
 import type {
@@ -18,16 +22,20 @@ import type {
 } from "../../services/promotions";
 import { ProductInput } from "../../services/products";
 import {
-  CATEGORY_LABELS,
-  CATEGORY_LIST,
   PROMOTION_SCOPE_LABELS,
   PROMOTION_STATUS_LABELS,
 } from "../../lib/labels";
+import { useCategories } from "../../hooks/useCategories";
+import { CategoryItem } from "../../services/categories";
 
 interface QuanLyHangHoaProps {
   products: Product[];
   promotions: Promotion[];
   // Gọi API rồi mới cập nhật state; nếu API lỗi sẽ ném lỗi (throw)
+  onUpdateProduct?: (
+    productId: string,
+    data: Partial<ProductInput>,
+  ) => Promise<any>;
   onUpdateProductPrice: (
     productId: string,
     newSellingPrice: number,
@@ -42,7 +50,7 @@ interface QuanLyHangHoaProps {
   ) => Promise<void>;
 }
 
-// Giá trị ban đầu của form thêm sản phẩm (mã để trống, người dùng tự nhập)
+// Giá trị ban đầu của form thêm sản phẩm
 const EMPTY_PRODUCT: Partial<Product> = {
   code: "",
   name: "",
@@ -58,6 +66,7 @@ const EMPTY_PRODUCT: Partial<Product> = {
 export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
   products,
   promotions,
+  onUpdateProduct,
   onUpdateProductPrice,
   onAddProduct,
   onCreatePromotion,
@@ -68,6 +77,82 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
   >("products");
   const [search, setSearch] = useState("");
   const [selectedCat, setSelectedCat] = useState<string>("all");
+
+  // === API CATEGORIES HOOK ===
+  const {
+    categories,
+    isLoading: loadingCategories,
+    reloadCategories,
+    createCategory,
+    updateCategory,
+    deleteCategory,
+  } = useCategories();
+
+  // Category Modal & Editing State
+  const [showAddCatModal, setShowAddCatModal] = useState(false);
+  const [newCatCode, setNewCatCode] = useState("");
+  const [newCatName, setNewCatName] = useState("");
+  // Product Full Editing Modal State
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [editProdForm, setEditProdForm] = useState<Partial<ProductInput>>({});
+  const [editProdSaving, setEditProdSaving] = useState(false);
+  const [editProdError, setEditProdError] = useState<string | null>(null);
+
+  const handleOpenEditProduct = (prod: Product) => {
+    setEditingProduct(prod);
+    setEditProdForm({
+      code: prod.code,
+      name: prod.name,
+      categoryId: prod.categoryId,
+      category: prod.category,
+      unit: prod.unit,
+      sellingPrice: prod.sellingPrice,
+      costPrice: prod.costPrice,
+      minStockLevel: prod.minStockLevel,
+      description: prod.description || '',
+      imageUrl: prod.imageUrl || '',
+      status: prod.status,
+    });
+    setEditProdError(null);
+  };
+
+  const handleSaveProductEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProduct) return;
+    try {
+      setEditProdSaving(true);
+      setEditProdError(null);
+      if (onUpdateProduct) {
+        await onUpdateProduct(editingProduct.id, editProdForm);
+      } else {
+        await onUpdateProductPrice(
+          editingProduct.id,
+          Number(editProdForm.sellingPrice ?? editingProduct.sellingPrice),
+          Number(editProdForm.costPrice ?? editingProduct.costPrice),
+        );
+      }
+      setEditingProduct(null);
+    } catch (err: any) {
+      setEditProdError(err.message || 'Không thể cập nhật sản phẩm');
+    } finally {
+      setEditProdSaving(false);
+    }
+  };
+
+  const [editingCat, setEditingCat] = useState<CategoryItem | null>(null);
+  const [editCatName, setEditCatName] = useState("");
+  const [editCatStatus, setEditCatStatus] = useState("active");
+  const [catSaving, setCatSaving] = useState(false);
+  const [catError, setCatError] = useState<string | null>(null);
+
+  // Helper lấy tên hiển thị của danh mục động từ API
+  const getCategoryName = (codeOrId?: string) => {
+    if (!codeOrId) return "Chưa phân loại";
+    const found = categories.find(
+      (c) => c.code === codeOrId || c.id === codeOrId,
+    );
+    return found ? found.name : codeOrId;
+  };
 
   // Price inline editing
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -147,10 +232,12 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
     }
   };
 
-  const categories: Category[] = CATEGORY_LIST; // mã enum của DB
-
+  // Lọc sản phẩm theo Category (khớp theo code hoặc categoryId) và từ khóa tìm kiếm
   const filteredProducts = products.filter((p) => {
-    const matchCat = selectedCat === "all" || p.category === selectedCat;
+    const matchCat =
+      selectedCat === "all" ||
+      p.category === selectedCat ||
+      p.categoryId === selectedCat;
     const matchSearch =
       p.name.toLowerCase().includes(search.toLowerCase()) ||
       p.code.toLowerCase().includes(search.toLowerCase());
@@ -189,13 +276,20 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
       return;
     }
 
+    const selectedCatItem = categories.find(
+      (c) => c.code === newProd.category || c.id === newProd.categoryId,
+    );
+
     setError(null);
     setSaving(true);
     try {
       await onAddProduct({
         code,
         name,
-        category: newProd.category as Category,
+        category: (selectedCatItem?.code ||
+          newProd.category ||
+          "SUA_TUOI_TIET_TRUNG") as Category,
+        categoryId: selectedCatItem?.id,
         unit: newProd.unit || "Hộp",
         sellingPrice: Number(newProd.sellingPrice),
         costPrice: Number(newProd.costPrice),
@@ -204,11 +298,57 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
         status: "active",
       });
       setShowAddModal(false);
-      setNewProd(EMPTY_PRODUCT); // reset form cho lần thêm sau
+      setNewProd(EMPTY_PRODUCT);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Không lưu được sản phẩm");
     } finally {
       setSaving(false);
+    }
+  };
+
+  // === HANDLERS CHO CATEGORY CRUD ===
+  const handleCreateCategorySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const code = newCatCode.trim().toUpperCase();
+    const name = newCatName.trim();
+    if (!code || !name) {
+      setCatError("Vui lòng nhập đầy đủ mã và tên danh mục!");
+      return;
+    }
+    setCatSaving(true);
+    setCatError(null);
+    try {
+      await createCategory({ code, name });
+      setShowAddCatModal(false);
+      setNewCatCode("");
+      setNewCatName("");
+    } catch (err: any) {
+      setCatError(err?.message || "Lỗi khi tạo danh mục mới!");
+    } finally {
+      setCatSaving(false);
+    }
+  };
+
+  const handleUpdateCategorySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCat) return;
+    const name = editCatName.trim();
+    if (!name) {
+      setCatError("Tên danh mục không được để trống!");
+      return;
+    }
+    setCatSaving(true);
+    setCatError(null);
+    try {
+      await updateCategory(editingCat.id, {
+        name,
+        status: editCatStatus,
+      });
+      setEditingCat(null);
+    } catch (err: any) {
+      setCatError(err?.message || "Lỗi khi cập nhật danh mục!");
+    } finally {
+      setCatSaving(false);
     }
   };
 
@@ -318,7 +458,7 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>2.1 Nhóm danh mục TH</span>
+            <span>2.1 Nhóm danh mục TH ({categories.length})</span>
           </button>
           <button
             id="tab-promotions"
@@ -342,6 +482,22 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
           >
             <Plus className="w-4 h-4" />
             <span>Thêm sản phẩm mới</span>
+          </button>
+        )}
+
+        {activeTab === "categories" && (
+          <button
+            id="btn-open-add-category"
+            onClick={() => {
+              setCatError(null);
+              setNewCatCode("");
+              setNewCatName("");
+              setShowAddCatModal(true);
+            }}
+            className="bg-[#004885] hover:bg-[#00386b] text-white text-xs font-bold px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors shadow-xs"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Thêm nhóm danh mục mới</span>
           </button>
         )}
 
@@ -372,30 +528,36 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
               />
             </div>
 
-            <div className="flex gap-1.5 overflow-x-auto w-full sm:w-auto">
+            {/* Filter pills: Đồng bộ danh mục từ API */}
+            <div className="flex gap-1.5 overflow-x-auto w-full sm:w-auto pb-1">
               <button
                 onClick={() => setSelectedCat("all")}
-                className={`px-2.5 py-1 rounded text-xs font-medium ${
+                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
                   selectedCat === "all"
                     ? "bg-[#004885] text-white"
-                    : "bg-slate-100 text-slate-600"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                 }`}
               >
                 Tất cả ({products.length})
               </button>
-              {categories.map((c) => (
-                <button
-                  key={c}
-                  onClick={() => setSelectedCat(c)}
-                  className={`px-2.5 py-1 rounded text-xs font-medium whitespace-nowrap ${
-                    selectedCat === c
-                      ? "bg-[#004885] text-white"
-                      : "bg-slate-100 text-slate-600"
-                  }`}
-                >
-                  {c}
-                </button>
-              ))}
+              {categories.map((c) => {
+                const count = products.filter(
+                  (p) => p.category === c.code || p.categoryId === c.id,
+                ).length;
+                return (
+                  <button
+                    key={c.id || c.code}
+                    onClick={() => setSelectedCat(c.code)}
+                    className={`px-2.5 py-1 rounded text-xs font-medium whitespace-nowrap transition-colors ${
+                      selectedCat === c.code
+                        ? "bg-[#004885] text-white"
+                        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    }`}
+                  >
+                    {c.name} ({count})
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -425,16 +587,46 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
                     >
                       <td className="py-2.5 px-3">
                         {p.imageUrl ? (
-                          <img
-                            src={assetUrl(p.imageUrl)}
-                            alt={p.name}
-                            className="w-12 h-12 object-contain rounded-md border border-slate-200 bg-white"
-                          />
-                        ) : (
-                          <div className="w-12 h-12 rounded-md bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400">
-                            <Package className="w-5 h-5" />
+                          <div className="relative group/img inline-block">
+                            <img
+                              src={assetUrl(p.imageUrl)}
+                              alt={p.name}
+                              className="w-16 h-16 object-contain rounded-xl border border-slate-200 bg-white p-1.5 transition-all duration-200 group-hover/img:scale-105 group-hover/img:border-[#004885] shadow-xs cursor-pointer"
+                              onError={(e) => {
+                                const target = e.currentTarget;
+                                const cleanPath = p.imageUrl?.startsWith('/') ? p.imageUrl : `/${p.imageUrl}`;
+                                if (target.src.includes(':3001')) {
+                                  target.src = cleanPath;
+                                } else {
+                                  target.style.display = 'none';
+                                  const fallback = target.parentElement?.nextElementSibling;
+                                  if (fallback) fallback.style.display = 'flex';
+                                }
+                              }}
+                            />
+                            {/* Hover-Zoom Popup Preview */}
+                            <div className="hidden group-hover/img:flex flex-col absolute left-full top-1/2 -translate-y-1/2 ml-3.5 z-50 bg-white p-3 rounded-2xl shadow-2xl border border-slate-200/80 w-48 pointer-events-none animate-in fade-in zoom-in-95 duration-150">
+                              <div className="w-full h-40 bg-slate-50/80 rounded-xl overflow-hidden flex items-center justify-center p-2 border border-slate-100">
+                                <img
+                                  src={assetUrl(p.imageUrl)}
+                                  alt={p.name}
+                                  className="w-full h-full object-contain"
+                                />
+                              </div>
+                              <p className="text-xs font-bold text-slate-800 mt-2.5 line-clamp-2 leading-tight">{p.name}</p>
+                              <div className="flex items-center justify-between mt-1 text-[10px] text-slate-500 font-mono">
+                                <span className="bg-sky-50 text-[#004885] px-1.5 py-0.5 rounded font-bold">{p.code}</span>
+                                <span>{p.unit}</span>
+                              </div>
+                            </div>
                           </div>
-                        )}
+                        ) : null}
+                        <div
+                          className="w-16 h-16 rounded-xl bg-slate-100 border border-slate-200 items-center justify-center text-slate-400"
+                          style={{ display: p.imageUrl ? 'none' : 'flex' }}
+                        >
+                          <Package className="w-7 h-7" />
+                        </div>
                       </td>
                       <td className="py-2.5 px-3 font-mono font-bold text-[#004885]">
                         {p.code}
@@ -443,12 +635,11 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
                         {p.name}
                       </td>
                       <td className="py-2.5 px-3 text-slate-600">
-                        <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-[11px]">
-                          {CATEGORY_LABELS[p.category] ?? p.category}
+                        <span className="bg-sky-50 text-[#004885] border border-sky-100 px-2 py-0.5 rounded text-[11px] font-medium">
+                          {p.categoryName || getCategoryName(p.category)}
                         </span>
                       </td>
                       <td className="py-2.5 px-3 text-slate-600">{p.unit}</td>
-                      <td className="py-2.5 px-3 font-mono text-slate-500"></td>
 
                       {/* Cost Price */}
                       <td className="py-2.5 px-3 text-right">
@@ -506,13 +697,24 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
                             </button>
                           </div>
                         ) : (
-                          <button
-                            onClick={() => startEditPrice(p)}
-                            className="text-[#004885] hover:text-[#00386b] font-medium text-[11px] inline-flex items-center gap-1 bg-sky-50 px-2 py-1 rounded"
-                          >
-                            <Edit2 className="w-3 h-3" />
-                            <span>Đổi giá</span>
-                          </button>
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => handleOpenEditProduct(p)}
+                              className="text-amber-700 hover:text-amber-800 font-medium text-[11px] inline-flex items-center gap-1 bg-amber-50 hover:bg-amber-100 px-2 py-1 rounded transition-colors"
+                              title="Chỉnh sửa toàn bộ thông tin sản phẩm"
+                            >
+                              <Edit className="w-3 h-3" />
+                              <span>Sửa</span>
+                            </button>
+                            <button
+                              onClick={() => startEditPrice(p)}
+                              className="text-[#004885] hover:text-[#00386b] font-medium text-[11px] inline-flex items-center gap-1 bg-sky-50 hover:bg-sky-100 px-2 py-1 rounded transition-colors"
+                              title="Đổi nhanh giá bán & giá vốn"
+                            >
+                              <Edit2 className="w-3 h-3" />
+                              <span>Đổi giá</span>
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -524,33 +726,102 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
         </div>
       )}
 
-      {/* 2.1: Categories breakdown */}
+      {/* 2.1: Nhóm danh mục TH kết nối API /api/categories với đầy đủ CRUD */}
       {activeTab === "categories" && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {categories.map((cat) => {
-            const count = products.filter((p) => p.category === cat).length;
-            return (
-              <div
-                key={cat}
-                className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs space-y-2"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="w-9 h-9 rounded-lg bg-sky-50 text-[#004885] flex items-center justify-center">
-                    <Package className="w-5 h-5" />
+        <div className="space-y-4">
+          {loadingCategories ? (
+            <div className="text-center py-10 text-slate-500 text-sm">
+              Đang tải danh mục từ máy chủ...
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {categories.map((cat) => {
+                const count = products.filter(
+                  (p) => p.category === cat.code || p.categoryId === cat.id,
+                ).length;
+                return (
+                  <div
+                    key={cat.id || cat.code}
+                    className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex flex-col justify-between space-y-3 hover:border-sky-300 transition-colors"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-sky-50 text-[#004885] border border-sky-100">
+                          {cat.code}
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              cat.status === "active"
+                                ? "bg-emerald-50 text-emerald-700"
+                                : "bg-slate-100 text-slate-600"
+                            }`}
+                          >
+                            {cat.status === "active"
+                              ? "Đang hoạt động"
+                              : "Tạm ngưng"}
+                          </span>
+                          <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                            {count} sản phẩm
+                          </span>
+                        </div>
+                      </div>
+                      <h4 className="font-bold text-sm text-slate-900">
+                        {cat.name}
+                      </h4>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Dòng sản phẩm nguyên chất tự nhiên tiêu chuẩn trang trại
+                        TH True Milk.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                      <button
+                        onClick={() => {
+                          setEditingCat(cat);
+                          setEditCatName(cat.name);
+                          setEditCatStatus(cat.status || "active");
+                          setCatError(null);
+                        }}
+                        className="px-2.5 py-1 text-xs font-semibold text-[#004885] hover:bg-sky-50 rounded flex items-center gap-1 transition-colors"
+                      >
+                        <Edit2 className="w-3 h-3" />
+                        <span>Sửa</span>
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (count > 0) {
+                            alert(
+                              `Không thể xóa danh mục "${cat.name}" vì đang có ${count} sản phẩm thuộc danh mục này! Vui lòng chuyển trạng thái thành Tạm ngưng (inactive).`,
+                            );
+                            return;
+                          }
+                          if (
+                            window.confirm(
+                              `Bạn có chắc chắn muốn xóa danh mục "${cat.name}" (${cat.code}) khỏi hệ thống?`,
+                            )
+                          ) {
+                            try {
+                              await deleteCategory(cat.id);
+                            } catch (err: any) {
+                              alert(
+                                "Lỗi khi xóa danh mục: " +
+                                  (err.message || "Không xác định"),
+                              );
+                            }
+                          }
+                        }}
+                        className="px-2.5 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded flex items-center gap-1 transition-colors"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Xóa</span>
+                      </button>
+                    </div>
                   </div>
-                  <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
-                    {count} sản phẩm
-                  </span>
-                </div>
-                <h4 className="font-bold text-sm text-slate-900">
-                  {CATEGORY_LABELS[cat]}
-                </h4>
-                <p className="text-xs text-slate-500">
-                  Dòng sản phẩm nguyên chất tự nhiên tiêu chuẩn trang trại TH.
-                </p>
-              </div>
-            );
-          })}
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -585,244 +856,148 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
                 <h4 className="font-bold text-sm text-slate-900">
                   {promo.name}
                 </h4>
-                <p className="text-xs text-slate-600">
-                  Ưu đãi:{" "}
-                  <span className="font-bold text-rose-600">
-                    {promo.discountType === "percentage"
-                      ? `Giảm ${promo.value}%`
-                      : `Giảm ${promo.value.toLocaleString("vi-VN")} đ`}
-                  </span>
-                </p>
-                <p className="text-[11px] text-slate-500">
-                  Phạm vi: {PROMOTION_SCOPE_LABELS[promo.scope]}
-                  {promo.scope === "category" && promo.applicableCategory
-                    ? ` - ${CATEGORY_LABELS[promo.applicableCategory]}`
-                    : ""}
-                  {promo.scope === "near_expiry" && promo.nearExpiryDays
-                    ? ` (còn <= ${promo.nearExpiryDays} ngày HSD)`
-                    : ""}
-                  {" • "}
-                  {promo.requiresCode ? "Nhập mã khi bán" : "Tự động áp dụng"}
-                </p>
-                {promo.maxDiscountAmount ? (
-                  <p className="text-[11px] text-slate-500">
-                    Giảm tối đa:{" "}
-                    {promo.maxDiscountAmount.toLocaleString("vi-VN")} đ
-                  </p>
-                ) : null}
-                {promo.usageLimit ? (
-                  <p className="text-[11px] text-slate-500">
-                    Đã dùng: {promo.usedCount}/{promo.usageLimit} lượt
-                  </p>
-                ) : null}
-                {promo.minOrderValue > 0 && (
-                  <p className="text-[11px] text-slate-500">
-                    Đơn tối thiểu: {promo.minOrderValue.toLocaleString("vi-VN")}{" "}
-                    đ
-                  </p>
+                {promo.description && (
+                  <p className="text-xs text-slate-500">{promo.description}</p>
                 )}
+                <div className="flex flex-wrap gap-2 text-[11px] pt-1">
+                  <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded">
+                    Phạm vi: {PROMOTION_SCOPE_LABELS[promo.scope]}
+                  </span>
+                  {promo.applicableCategory && (
+                    <span className="bg-sky-50 text-[#004885] px-2 py-0.5 rounded">
+                      Nhóm: {getCategoryName(promo.applicableCategory)}
+                    </span>
+                  )}
+                  {promo.nearExpiryDays && (
+                    <span className="bg-amber-50 text-amber-700 px-2 py-0.5 rounded">
+                      Cận date ≤ {promo.nearExpiryDays} ngày
+                    </span>
+                  )}
+                  {promo.minOrderValue > 0 && (
+                    <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded">
+                      Đơn từ {promo.minOrderValue.toLocaleString("vi-VN")} đ
+                    </span>
+                  )}
+                </div>
               </div>
 
-              {promo.scope === "product" &&
-                (promo.productIds?.length ?? 0) > 0 && (
-                  <p className="text-[11px] text-slate-500">
-                    Sản phẩm áp dụng:{" "}
-                    {promo
-                      .productIds!.map(
-                        (id) =>
-                          products.find((p) => p.id === id)?.name || "SP đã ẩn",
-                      )
-                      .join(", ")}
-                  </p>
-                )}
-
-              <div className="text-[11px] text-slate-500 border-t border-slate-100 pt-2 space-y-2">
-                <div className="flex items-center gap-1.5">
+              <div className="flex items-center justify-between border-t border-slate-100 pt-3">
+                <div className="text-xs text-slate-500 flex items-center gap-1">
                   <Calendar className="w-3.5 h-3.5" />
                   <span>
-                    Thời hạn: {promo.startDate} đến {promo.endDate}
+                    {promo.startDate} → {promo.endDate}
                   </span>
                 </div>
-                {promo.statusChangedAt && (
-                  <p>Đổi trạng thái lần cuối: {promo.statusChangedAt}</p>
-                )}
-                {promo.status !== "expired" && (
-                  <div className="flex gap-2 pt-1">
-                    {(promo.status === "draft" ||
-                      promo.status === "paused") && (
-                      <button
-                        onClick={() => handlePromoAction(promo, "activate")}
-                        className="px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-bold"
-                      >
-                        Kích hoạt
-                      </button>
-                    )}
-                    {(promo.status === "active" ||
-                      promo.status === "scheduled") && (
-                      <button
-                        onClick={() => handlePromoAction(promo, "pause")}
-                        className="px-3 py-1.5 rounded-md bg-white border border-amber-300 text-amber-700 hover:bg-amber-50 font-bold"
-                      >
-                        Tạm dừng
-                      </button>
-                    )}
+                <div className="flex items-center gap-1">
+                  {promo.status === "draft" && (
+                    <button
+                      onClick={() => handlePromoAction(promo, "activate")}
+                      className="text-xs font-semibold px-2.5 py-1 rounded bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                    >
+                      Kích hoạt
+                    </button>
+                  )}
+                  {promo.status === "active" && (
+                    <button
+                      onClick={() => handlePromoAction(promo, "pause")}
+                      className="text-xs font-semibold px-2.5 py-1 rounded bg-amber-50 text-amber-700 hover:bg-amber-100"
+                    >
+                      Tạm dừng
+                    </button>
+                  )}
+                  {promo.status === "paused" && (
+                    <button
+                      onClick={() => handlePromoAction(promo, "activate")}
+                      className="text-xs font-semibold px-2.5 py-1 rounded bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                    >
+                      Tiếp tục
+                    </button>
+                  )}
+                  {promo.status !== "expired" && (
                     <button
                       onClick={() => handlePromoAction(promo, "end")}
-                      className="px-3 py-1.5 rounded-md bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 font-bold"
+                      className="text-xs font-semibold px-2.5 py-1 rounded bg-rose-50 text-rose-700 hover:bg-rose-100"
                     >
                       Kết thúc
                     </button>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             </div>
           ))}
         </div>
       )}
 
-      {/* Modal: Add New Product */}
-      {showAddModal && (
+      {/* Modal: Thêm nhóm danh mục mới */}
+      {showAddCatModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl p-5 space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="font-bold text-sm text-slate-900">
-                Thêm sản phẩm TH true milk mới
+              <h3 className="font-bold text-base text-slate-900 flex items-center gap-2">
+                <Layers className="w-5 h-5 text-[#004885]" />
+                <span>Thêm nhóm danh mục TH mới</span>
               </h3>
               <button
-                onClick={closeAddModal}
-                className="text-slate-400 hover:text-slate-600"
+                onClick={() => setShowAddCatModal(false)}
+                className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleCreateProduct} className="space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">
-                    Mã sản phẩm
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="VD: TH001"
-                    value={newProd.code}
-                    onChange={(e) =>
-                      setNewProd({ ...newProd, code: e.target.value })
-                    }
-                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-mono font-bold"
-                    required
-                  />
-                </div>
+            {catError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{catError}</span>
+              </div>
+            )}
+
+            <form
+              onSubmit={handleCreateCategorySubmit}
+              className="space-y-3 text-xs"
+            >
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">
+                  Mã danh mục (Viết hoa không dấu, ví dụ: SUA_HAT, BANH_GAO)*
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Mã nhóm, vd: SUA_HAT"
+                  value={newCatCode}
+                  onChange={(e) => setNewCatCode(e.target.value.toUpperCase())}
+                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-mono font-bold"
+                />
               </div>
 
               <div>
                 <label className="font-bold text-slate-700 block mb-1">
-                  Tên sản phẩm
+                  Tên hiển thị ngành hàng TH*
                 </label>
                 <input
                   type="text"
-                  placeholder="VD: Sữa tươi tiệt trùng TH true MILK Dâu 180ml"
-                  value={newProd.name}
-                  onChange={(e) =>
-                    setNewProd({ ...newProd, name: e.target.value })
-                  }
-                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
                   required
+                  placeholder="Ví dụ: Sữa hạt cao cấp TH True Nut"
+                  value={newCatName}
+                  onChange={(e) => setNewCatName(e.target.value)}
+                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">
-                    Danh mục
-                  </label>
-                  <select
-                    value={newProd.category}
-                    onChange={(e) =>
-                      setNewProd({
-                        ...newProd,
-                        category: e.target.value as Category,
-                      })
-                    }
-                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
-                  >
-                    {categories.map((c) => (
-                      <option key={c} value={c}>
-                        {CATEGORY_LABELS[c]}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">
-                    Đơn vị tính
-                  </label>
-                  <input
-                    type="text"
-                    value={newProd.unit}
-                    onChange={(e) =>
-                      setNewProd({ ...newProd, unit: e.target.value })
-                    }
-                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
-                    placeholder="Lốc 4 hộp, Thùng, Hũ..."
-                    required
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">
-                    Giá vốn (VNĐ)
-                  </label>
-                  <input
-                    type="number"
-                    value={newProd.costPrice}
-                    onChange={(e) =>
-                      setNewProd({
-                        ...newProd,
-                        costPrice: Number(e.target.value),
-                      })
-                    }
-                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-semibold"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">
-                    Giá bán niêm yết (VNĐ)
-                  </label>
-                  <input
-                    type="number"
-                    value={newProd.sellingPrice}
-                    onChange={(e) =>
-                      setNewProd({
-                        ...newProd,
-                        sellingPrice: Number(e.target.value),
-                      })
-                    }
-                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-bold text-[#004885]"
-                    required
-                  />
-                </div>
-              </div>
-
-              {error && <p className="text-red-600 font-medium">{error}</p>}
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={closeAddModal}
-                  className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg font-medium"
+                  onClick={() => setShowAddCatModal(false)}
+                  className="px-4 py-2 rounded-lg bg-slate-100 text-slate-700 font-bold hover:bg-slate-200"
                 >
                   Hủy
                 </button>
                 <button
                   type="submit"
-                  disabled={saving}
-                  className="px-4 py-2 bg-[#004885] hover:bg-[#00386b] text-white rounded-lg font-bold shadow-xs disabled:opacity-60"
+                  disabled={catSaving}
+                  className="px-4 py-2 rounded-lg bg-[#004885] hover:bg-[#00386b] text-white font-bold disabled:opacity-60"
                 >
-                  {saving ? "Đang lưu..." : "Lưu sản phẩm"}
+                  {catSaving ? "Đang lưu..." : "Tạo danh mục"}
                 </button>
               </div>
             </form>
@@ -830,17 +1005,537 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
         </div>
       )}
 
-      {/* Modal: Add Promotion */}
+      {/* Modal: Chỉnh sửa danh mục */}
+      {editingCat && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl p-5 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-base text-slate-900 flex items-center gap-2">
+                <Edit2 className="w-5 h-5 text-[#004885]" />
+                <span>Chỉnh sửa danh mục {editingCat.code}</span>
+              </h3>
+              <button
+                onClick={() => setEditingCat(null)}
+                className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {catError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{catError}</span>
+              </div>
+            )}
+
+            <form
+              onSubmit={handleUpdateCategorySubmit}
+              className="space-y-3 text-xs"
+            >
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">
+                  Tên hiển thị ngành hàng*
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editCatName}
+                  onChange={(e) => setEditCatName(e.target.value)}
+                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">
+                  Trạng thái hoạt động
+                </label>
+                <select
+                  value={editCatStatus}
+                  onChange={(e) => setEditCatStatus(e.target.value)}
+                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-semibold"
+                >
+                  <option value="active">Đang hoạt động (active)</option>
+                  <option value="inactive">Tạm ngưng (inactive)</option>
+                </select>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingCat(null)}
+                  className="px-4 py-2 rounded-lg bg-slate-100 text-slate-700 font-bold hover:bg-slate-200"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={catSaving}
+                  className="px-4 py-2 rounded-lg bg-[#004885] hover:bg-[#00386b] text-white font-bold disabled:opacity-60"
+                >
+                  {catSaving ? "Đang lưu..." : "Cập nhật"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Chỉnh sửa toàn diện sản phẩm */}
+      {editingProduct && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[92vh] flex flex-col shadow-2xl my-4">
+            <div className="flex items-center justify-between p-5 border-b border-slate-100">
+              <h3 className="font-bold text-lg text-slate-900 flex items-center gap-2">
+                <Edit className="w-5 h-5 text-amber-600" />
+                <span>Chỉnh sửa sản phẩm ({editingProduct.code})</span>
+              </h3>
+              <button
+                onClick={() => setEditingProduct(null)}
+                className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto flex-1">
+              {editProdError && (
+                <div className="mb-4 p-3 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 text-xs flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{editProdError}</span>
+                </div>
+              )}
+
+              <form
+                id="editProductForm"
+                onSubmit={handleSaveProductEdit}
+                className="space-y-3.5 text-xs"
+              >
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">
+                    Mã sản phẩm (duy nhất)
+                  </label>
+                  <input
+                    type="text"
+                    value={editProdForm.code || ''}
+                    onChange={(e) =>
+                      setEditProdForm({ ...editProdForm, code: e.target.value })
+                    }
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg font-mono font-bold text-[#004885]"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">
+                    Tên sản phẩm
+                  </label>
+                  <input
+                    type="text"
+                    value={editProdForm.name || ''}
+                    onChange={(e) =>
+                      setEditProdForm({ ...editProdForm, name: e.target.value })
+                    }
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg font-medium text-slate-900"
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">
+                      Danh mục (Từ API Categories)
+                    </label>
+                    <select
+                      value={editProdForm.category || ''}
+                      onChange={(e) => {
+                        const selected = categories.find(
+                          (c) =>
+                            c.code === e.target.value ||
+                            c.id === e.target.value,
+                        );
+                        setEditProdForm({
+                          ...editProdForm,
+                          category: (selected?.code || e.target.value) as any,
+                          categoryId: selected?.id,
+                        });
+                      }}
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg"
+                    >
+                      {categories.map((c) => (
+                        <option key={c.id || c.code} value={c.code}>
+                          {c.name} ({c.code})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">
+                      Đơn vị tính
+                    </label>
+                    <input
+                      type="text"
+                      value={editProdForm.unit || ''}
+                      onChange={(e) =>
+                        setEditProdForm({ ...editProdForm, unit: e.target.value })
+                      }
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">
+                      Giá vốn (VNĐ)
+                    </label>
+                    <input
+                      type="number"
+                      value={editProdForm.costPrice ?? 0}
+                      onChange={(e) =>
+                        setEditProdForm({
+                          ...editProdForm,
+                          costPrice: Number(e.target.value),
+                        })
+                      }
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg font-semibold"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">
+                      Giá bán (VNĐ)
+                    </label>
+                    <input
+                      type="number"
+                      value={editProdForm.sellingPrice ?? 0}
+                      onChange={(e) =>
+                        setEditProdForm({
+                          ...editProdForm,
+                          sellingPrice: Number(e.target.value),
+                        })
+                      }
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg font-bold text-[#004885]"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">
+                      Định mức tồn tối thiểu
+                    </label>
+                    <input
+                      type="number"
+                      value={editProdForm.minStockLevel ?? 0}
+                      onChange={(e) =>
+                        setEditProdForm({
+                          ...editProdForm,
+                          minStockLevel: Number(e.target.value),
+                        })
+                      }
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">
+                      Trạng thái kinh doanh
+                    </label>
+                    <select
+                      value={editProdForm.status || 'active'}
+                      onChange={(e) =>
+                        setEditProdForm({
+                          ...editProdForm,
+                          status: e.target.value as any,
+                        })
+                      }
+                      className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg font-medium"
+                    >
+                      <option value="active">Đang kinh doanh</option>
+                      <option value="discontinued">Ngừng kinh doanh</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">
+                    Đường dẫn ảnh sản phẩm (imageUrl)
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={editProdForm.imageUrl || ''}
+                      onChange={(e) =>
+                        setEditProdForm({ ...editProdForm, imageUrl: e.target.value })
+                      }
+                      className="flex-1 p-2.5 bg-slate-50 border border-slate-200 rounded-lg font-mono text-[11px]"
+                      placeholder="VD: /uploads/products/TH-FRESH-1L.webp"
+                    />
+                    {editProdForm.imageUrl && (
+                      <div className="w-10 h-10 border border-slate-200 rounded-lg bg-white overflow-hidden shrink-0 flex items-center justify-center p-0.5">
+                        <img
+                          src={assetUrl(editProdForm.imageUrl)}
+                          alt="Preview"
+                          className="w-full h-full object-contain"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">
+                    Mô tả sản phẩm
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={editProdForm.description || ''}
+                    onChange={(e) =>
+                      setEditProdForm({ ...editProdForm, description: e.target.value })
+                    }
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg"
+                    placeholder="Đặc tính, thành phần tự nhiên..."
+                  />
+                </div>
+              </form>
+            </div>
+
+            <div className="p-4 border-t border-slate-100 flex justify-end gap-2 bg-slate-50 rounded-b-2xl">
+              <button
+                type="button"
+                onClick={() => setEditingProduct(null)}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-200 rounded-lg font-medium text-xs transition-colors"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="submit"
+                form="editProductForm"
+                disabled={editProdSaving}
+                className="px-5 py-2 bg-[#004885] hover:bg-[#00386b] text-white rounded-lg font-bold text-xs disabled:opacity-50 flex items-center gap-1.5 shadow-sm transition-colors"
+              >
+                {editProdSaving ? 'Đang lưu...' : 'Lưu thay đổi'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Thêm sản phẩm mới */}
+      {showAddModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] flex flex-col shadow-2xl">
+            <div className="flex items-center justify-between p-5 border-b border-slate-100">
+              <h3 className="font-bold text-lg text-slate-900 flex items-center gap-2">
+                <Package className="w-5 h-5 text-[#004885]" />
+                <span>Thêm sản phẩm TH mới</span>
+              </h3>
+              <button
+                onClick={closeAddModal}
+                className="text-slate-400 hover:bg-slate-100 p-2 rounded-full"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto flex-1">
+              {error && (
+                <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700">
+                  {error}
+                </div>
+              )}
+
+              <form
+                id="addProductForm"
+                onSubmit={handleCreateProduct}
+                className="space-y-3 text-xs"
+              >
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">
+                    Mã sản phẩm (duy nhất)
+                  </label>
+                  <input
+                    type="text"
+                    value={newProd.code}
+                    onChange={(e) =>
+                      setNewProd({ ...newProd, code: e.target.value })
+                    }
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-mono font-bold"
+                    placeholder="VD: TH009"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">
+                    Tên sản phẩm
+                  </label>
+                  <input
+                    type="text"
+                    value={newProd.name}
+                    onChange={(e) =>
+                      setNewProd({ ...newProd, name: e.target.value })
+                    }
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+                    placeholder="VD: Sữa tươi tiệt trùng TH True MILK ít đường 180ml"
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">
+                      Danh mục (Từ API Categories)
+                    </label>
+                    <select
+                      value={newProd.category}
+                      onChange={(e) => {
+                        const selected = categories.find(
+                          (c) =>
+                            c.code === e.target.value ||
+                            c.id === e.target.value,
+                        );
+                        setNewProd({
+                          ...newProd,
+                          category: (selected?.code || e.target.value) as any,
+                          categoryId: selected?.id,
+                        });
+                      }}
+                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+                    >
+                      {categories.map((c) => (
+                        <option key={c.id || c.code} value={c.code}>
+                          {c.name} ({c.code})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">
+                      Đơn vị tính
+                    </label>
+                    <input
+                      type="text"
+                      value={newProd.unit}
+                      onChange={(e) =>
+                        setNewProd({ ...newProd, unit: e.target.value })
+                      }
+                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+                      placeholder="Lốc 4 hộp, Thùng, Hũ..."
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">
+                      Giá vốn (VNĐ)
+                    </label>
+                    <input
+                      type="number"
+                      value={newProd.costPrice}
+                      onChange={(e) =>
+                        setNewProd({
+                          ...newProd,
+                          costPrice: Number(e.target.value),
+                        })
+                      }
+                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-semibold"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">
+                      Giá bán (VNĐ)
+                    </label>
+                    <input
+                      type="number"
+                      value={newProd.sellingPrice}
+                      onChange={(e) =>
+                        setNewProd({
+                          ...newProd,
+                          sellingPrice: Number(e.target.value),
+                        })
+                      }
+                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-bold text-[#004885]"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">
+                    Định mức tồn tối thiểu (cảnh báo nhập kho)
+                  </label>
+                  <input
+                    type="number"
+                    value={newProd.minStockLevel}
+                    onChange={(e) =>
+                      setNewProd({
+                        ...newProd,
+                        minStockLevel: Number(e.target.value),
+                      })
+                    }
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">
+                    Mô tả sản phẩm
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={newProd.description}
+                    onChange={(e) =>
+                      setNewProd({ ...newProd, description: e.target.value })
+                    }
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+                    placeholder="Đặc tính, thành phần tự nhiên..."
+                  />
+                </div>
+              </form>
+            </div>
+
+            <div className="p-4 border-t border-slate-100 flex justify-end gap-2 bg-slate-50 rounded-b-2xl">
+              <button
+                type="button"
+                onClick={closeAddModal}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-200 rounded-lg font-medium text-xs"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="submit"
+                form="addProductForm"
+                disabled={saving}
+                className="px-5 py-2 bg-[#004885] hover:bg-[#00386b] text-white rounded-lg font-bold text-xs shadow-xs disabled:opacity-60"
+              >
+                {saving ? "Đang lưu..." : "Lưu sản phẩm"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Tạo khuyến mãi mới */}
       {showAddPromoModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full max-h-[92vh] overflow-auto p-6 shadow-2xl space-y-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl p-5 space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="font-bold text-sm text-slate-900">
-                Tạo chương trình khuyến mãi mới
+              <h3 className="font-bold text-base text-slate-900 flex items-center gap-2">
+                <Tag className="w-5 h-5 text-emerald-600" />
+                <span>Tạo chương trình khuyến mãi TH</span>
               </h3>
               <button
                 onClick={() => setShowAddPromoModal(false)}
-                className="text-slate-400 hover:text-slate-600"
+                className="p-1.5 rounded-md hover:bg-slate-100 text-slate-400"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -850,37 +1545,54 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
               onSubmit={handleCreatePromotion}
               className="space-y-3 text-xs"
             >
-              <div>
-                <label className="font-bold text-slate-700 block mb-1">
-                  Mã khuyến mãi (Voucher Code)
-                </label>
-                <input
-                  type="text"
-                  value={newPromo.code}
-                  onChange={(e) =>
-                    setNewPromo({
-                      ...newPromo,
-                      code: e.target.value.toUpperCase(),
-                    })
-                  }
-                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-mono uppercase font-bold"
-                  required
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">
+                    Mã CTKM (viết hoa)*
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="VD: THMILK10"
+                    value={newPromo.code}
+                    onChange={(e) =>
+                      setNewPromo({
+                        ...newPromo,
+                        code: e.target.value.toUpperCase(),
+                      })
+                    }
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-mono font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">
+                    Tên chương trình*
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="VD: Giảm 10% sữa tiệt trùng"
+                    value={newPromo.name}
+                    onChange={(e) =>
+                      setNewPromo({ ...newPromo, name: e.target.value })
+                    }
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
+                  />
+                </div>
               </div>
 
               <div>
                 <label className="font-bold text-slate-700 block mb-1">
-                  Tên chương trình
+                  Mô tả
                 </label>
-                <input
-                  type="text"
-                  placeholder="VD: Khuyến mãi mừng ngày Nhà giáo..."
-                  value={newPromo.name}
+                <textarea
+                  rows={2}
+                  placeholder="Ghi chú điều kiện áp dụng..."
+                  value={newPromo.description || ""}
                   onChange={(e) =>
-                    setNewPromo({ ...newPromo, name: e.target.value })
+                    setNewPromo({ ...newPromo, description: e.target.value })
                   }
                   className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
-                  required
                 />
               </div>
 
@@ -899,19 +1611,18 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
                     }
                     className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
                   >
-                    {(
-                      Object.keys(PROMOTION_SCOPE_LABELS) as PromotionScope[]
-                    ).map((sc) => (
-                      <option key={sc} value={sc}>
-                        {PROMOTION_SCOPE_LABELS[sc]}
-                      </option>
-                    ))}
+                    <option value="order">Toàn đơn hàng (order)</option>
+                    <option value="category">Nhóm hàng (category)</option>
+                    <option value="product">Sản phẩm cụ thể (product)</option>
+                    <option value="near_expiry">
+                      Xả hàng cận date (near_expiry)
+                    </option>
                   </select>
                 </div>
                 {newPromo.scope === "category" && (
                   <div>
                     <label className="font-bold text-slate-700 block mb-1">
-                      Nhóm hàng
+                      Nhóm hàng (Từ API Categories)
                     </label>
                     <select
                       value={newPromo.applicableCategory || ""}
@@ -927,8 +1638,8 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
                     >
                       <option value="">-- Chọn nhóm hàng --</option>
                       {categories.map((c) => (
-                        <option key={c} value={c}>
-                          {CATEGORY_LABELS[c]}
+                        <option key={c.id || c.code} value={c.code}>
+                          {c.name} ({c.code})
                         </option>
                       ))}
                     </select>
@@ -949,7 +1660,8 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
                           nearExpiryDays: Number(e.target.value),
                         })
                       }
-                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-bold"
+                      placeholder="VD: 15 hoặc 30"
+                      className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
                     />
                   </div>
                 )}
@@ -958,7 +1670,7 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="font-bold text-slate-700 block mb-1">
-                    Loại giảm giá
+                    Hình thức giảm
                   </label>
                   <select
                     value={newPromo.discountType}
@@ -970,17 +1682,23 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
                     }
                     className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg"
                   >
-                    <option value="percentage">Giảm theo %</option>
-                    <option value="fixed_amount">Giảm số tiền cố định</option>
+                    <option value="percentage">Theo phần trăm (%)</option>
+                    <option value="fixed_amount">Số tiền cố định (đ)</option>
                   </select>
                 </div>
                 <div>
                   <label className="font-bold text-slate-700 block mb-1">
-                    Giá trị giảm
+                    Mức giảm*{" "}
+                    {newPromo.discountType === "percentage" ? "(%)" : "(đ)"}
                   </label>
                   <input
                     type="number"
-                    value={newPromo.value}
+                    min={1}
+                    max={
+                      newPromo.discountType === "percentage" ? 100 : undefined
+                    }
+                    required
+                    value={newPromo.value ?? ""}
                     onChange={(e) =>
                       setNewPromo({
                         ...newPromo,
@@ -988,7 +1706,6 @@ export const QuanLyHangHoa: React.FC<QuanLyHangHoaProps> = ({
                       })
                     }
                     className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg font-bold"
-                    required
                   />
                 </div>
               </div>
